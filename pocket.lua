@@ -24,7 +24,7 @@ local function request(msg, timeout)
     local timer = os.startTimer(timeout)
     while true do
         local ev = {os.pullEvent()}
-        if ev[1] == "modem_message" and ev[4] == REPLY_CHANNEL and type(ev[5]) == "table" then
+        if ev[1] == "modem_message" and ev[3] == REPLY_CHANNEL and type(ev[5]) == "table" then
             os.cancelTimer(timer)
             return ev[5]
         elseif ev[1] == "timer" and ev[2] == timer then
