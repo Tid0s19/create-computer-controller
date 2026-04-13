@@ -48,16 +48,17 @@ function router.run(data)
                             end
                         end
 
-                    elseif rule.type == "attribute" then
+                    elseif rule.type == "group" then
                         if sensor.freeSlots > 0 then
                             local budget = sensor.freeSlots * 64
-                            local matched = network.getAttributeStock(rule)
-                            for _, item in ipairs(matched) do
+                            local stockMap = network.getStockMap()
+                            for _, groupItem in ipairs(rule.items) do
                                 if budget <= 0 then break end
-                                local atDest = network.getItemCountAt(dest.address, item.name)
-                                local toRequest = math.min(item.count - atDest, budget)
+                                local inStock = stockMap[groupItem.name] or 0
+                                local atDest = network.getItemCountAt(dest.address, groupItem.name)
+                                local toRequest = math.min(inStock - atDest, budget)
                                 if toRequest > 0 then
-                                    network.requestItems(dest.address, item.name, toRequest)
+                                    network.requestItems(dest.address, groupItem.name, toRequest)
                                     budget = budget - toRequest
                                 end
                             end

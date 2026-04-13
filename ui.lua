@@ -60,7 +60,7 @@ local function input(prompt, y, prefill)
 end
 
 ----------------------------------------------------------------------
--- Usage color: green (empty) → red (full)
+-- Usage color: green (empty) -> red (full)
 ----------------------------------------------------------------------
 
 local function usageColor(pct)
@@ -86,7 +86,6 @@ local function pick(title, items, hints, onKey, opts)
     local sel, scroll = 1, 0
     local search = ""
 
-    -- Build filtered index list
     local function buildVisible()
         local vis = {}
         if search == "" then
@@ -169,7 +168,6 @@ local function pick(title, items, hints, onKey, opts)
                     at(2, y, "> " .. trunc(label, W - 6), C.sel, colours.grey)
                     if right then
                         local rc = (type(it) == "table" and it.rcol) or C.dim
-                        -- Fix: grey text invisible on grey highlight
                         if rc == colours.grey then rc = colours.white end
                         at(W - #right, y, right, rc, colours.grey)
                     end
@@ -236,8 +234,138 @@ local function pick(title, items, hints, onKey, opts)
             search = search .. ev[2]
             visible = buildVisible()
             sel = 1; scroll = 0
-        elseif ev[1] == "key" and not searchable and onKey then
-            -- already handled above
+        end
+    end
+end
+
+----------------------------------------------------------------------
+-- Multi-select picker (for custom item groups)
+----------------------------------------------------------------------
+
+local function multiPick(title, allItems, selected)
+    selected = selected or {}
+    local sel, scroll = 1, 0
+    local search = ""
+
+    local function buildVisible()
+        local vis = {}
+        if search == "" then
+            for i = 1, #allItems do vis[#vis + 1] = i end
+        else
+            local q = search:lower()
+            for i, item in ipairs(allItems) do
+                local label = type(item) == "table" and item.label or tostring(item)
+                local match = label:lower():find(q, 1, true)
+                if not match and type(item) == "table" and item.name then
+                    match = item.name:lower():find(q, 1, true)
+                end
+                if match then vis[#vis + 1] = i end
+            end
+        end
+        return vis
+    end
+
+    local visible = buildVisible()
+
+    local function countSelected()
+        local n = 0
+        for _ in pairs(selected) do n = n + 1 end
+        return n
+    end
+
+    while true do
+        W, H = term.getSize()
+        local rows = H - 6
+        clear()
+        bar(1, " " .. title)
+
+        at(2, 3, "Search: ", C.accent)
+        at(10, 3, search, colours.white)
+        at(10 + #search, 3, "_", C.dim)
+
+        at(2, H - 1, "(" .. countSelected() .. " selected)", C.accent)
+        footer("Enter:Toggle  Tab:Done  Q:Cancel")
+
+        local baseY = 4
+
+        if #visible == 0 then
+            at(2, baseY + 1, "No matches", C.dim)
+        else
+            if sel - scroll > rows then scroll = sel - rows end
+            if sel - scroll < 1 then scroll = sel - 1 end
+
+            for i = 1, rows do
+                local vidx = i + scroll
+                if vidx > #visible then break end
+                local origIdx = visible[vidx]
+                local it = allItems[origIdx]
+                local y = baseY + i - 1
+                local label = type(it) == "table" and it.label or tostring(it)
+                local right = type(it) == "table" and it.right or nil
+                local name = type(it) == "table" and it.name or nil
+                local isSel = name and selected[name]
+
+                local check = isSel and "[*]" or "[ ]"
+                local checkCol = isSel and C.ok or C.dim
+
+                if vidx == sel then
+                    at(1, y, string.rep(" ", W), nil, colours.grey)
+                    at(2, y, "> ", C.sel, colours.grey)
+                    at(4, y, check, checkCol, colours.grey)
+                    at(8, y, trunc(label, W - 12), C.sel, colours.grey)
+                    if right then
+                        local rc = (type(it) == "table" and it.rcol) or C.dim
+                        if rc == colours.grey then rc = colours.white end
+                        at(W - #right, y, right, rc, colours.grey)
+                    end
+                else
+                    at(4, y, check, checkCol)
+                    at(8, y, trunc(label, W - 12), colours.white)
+                    if right then
+                        at(W - #right, y, right, (type(it) == "table" and it.rcol) or C.dim)
+                    end
+                end
+            end
+        end
+
+        local ev = {os.pullEvent()}
+
+        if ev[1] == "key" then
+            local key = ev[2]
+            if key == keys.up then
+                sel = sel > 1 and sel - 1 or #visible
+            elseif key == keys.down then
+                sel = sel < #visible and sel + 1 or 1
+            elseif key == keys.enter and #visible > 0 then
+                local it = allItems[visible[sel]]
+                if type(it) == "table" and it.name then
+                    if selected[it.name] then
+                        selected[it.name] = nil
+                    else
+                        selected[it.name] = it.label or it.name
+                    end
+                end
+            elseif key == keys.tab then
+                return selected
+            elseif key == keys.backspace then
+                if search ~= "" then
+                    search = search:sub(1, -2)
+                    visible = buildVisible()
+                    sel = 1; scroll = 0
+                end
+            elseif key == keys.q then
+                if search ~= "" then
+                    search = ""
+                    visible = buildVisible()
+                    sel = 1; scroll = 0
+                else
+                    return nil
+                end
+            end
+        elseif ev[1] == "char" then
+            search = search .. ev[2]
+            visible = buildVisible()
+            sel = 1; scroll = 0
         end
     end
 end
@@ -298,72 +426,21 @@ local function browseTags()
 end
 
 ----------------------------------------------------------------------
--- Browse attribute filters (searchable)
+-- Build network item list for multi-select
 ----------------------------------------------------------------------
 
--- Attributes we can detect from item detail data
-local ATTRIBUTES = {
-    { key = "fuel",       label = "Is furnace fuel",   match = function(d) return d.burnTime and d.burnTime > 0 end },
-    { key = "damaged",    label = "Is damaged",        match = function(d) return d.damage and d.damage > 0 end },
-    { key = "damageable", label = "Can be damaged",    match = function(d) return d.maxDamage and d.maxDamage > 0 end },
-    { key = "enchanted",  label = "Is enchanted",      match = function(d) return d.enchantments and #d.enchantments > 0 end },
-    { key = "stackable",  label = "Is stackable",      match = function(d) return d.maxCount and d.maxCount > 1 end },
-    { key = "unstackable",label = "Not stackable",     match = function(d) return d.maxCount and d.maxCount == 1 end },
-    { key = "food",       label = "Is food",           match = function(d) return d.tags and d.tags["c:foods"] end },
-    { key = "ore",        label = "Is an ore",         match = function(d) return d.tags and d.tags["c:ores"] end },
-}
-
--- Tag-based attributes (checked via item tags in stock data)
-local TAG_ATTRIBUTES = {
-    { key = "smeltable",  label = "Can be smelted",    tag = "c:ingots",    source = true },
-    { key = "crushable",  label = "Can be crushed",    tagPattern = "crush" },
-    { key = "washable",   label = "Can be washed",     tagPattern = "wash" },
-    { key = "fuel_tag",   label = "Is fuel (tag)",     tag = "minecraft:coals" },
-    { key = "logs",       label = "Is a log/wood",     tag = "minecraft:logs" },
-    { key = "planks",     label = "Is planks",         tag = "minecraft:planks" },
-    { key = "stone",      label = "Is stone",          tag = "c:stones" },
-    { key = "dye",        label = "Is a dye",          tag = "c:dyes" },
-    { key = "glass",      label = "Is glass",          tag = "c:glass_blocks" },
-    { key = "ingot",      label = "Is an ingot",       tag = "c:ingots" },
-    { key = "nugget",     label = "Is a nugget",       tag = "c:nuggets" },
-    { key = "gem",        label = "Is a gem",          tag = "c:gems" },
-    { key = "raw_ore",    label = "Is raw ore",        tag = "c:raw_materials" },
-    { key = "dust",       label = "Is dust",           tag = "c:dusts" },
-}
-
-local function browseAttributes()
+local function getNetworkItemList()
+    local items = network.getAllItems()
     local list = {}
-
-    -- Detail-based attributes
-    for _, attr in ipairs(ATTRIBUTES) do
-        table.insert(list, { label = attr.label, name = attr.key, attrType = "detail", attr = attr })
+    for _, it in ipairs(items) do
+        table.insert(list, {
+            label = it.displayName,
+            right = tostring(it.count),
+            rcol = C.dim,
+            name = it.name,
+        })
     end
-
-    -- Tag-based attributes
-    for _, attr in ipairs(TAG_ATTRIBUTES) do
-        table.insert(list, { label = attr.label, name = attr.key, attrType = "tag_attr", attr = attr })
-    end
-
-    table.insert(list, { label = "" })
-    table.insert(list, { label = "Name contains...", name = "__name_filter", attrType = "name" })
-
-    local idx = pick("Pick attribute", list, "Type:Search  Enter:Select  Q:Cancel", nil, {searchable = true})
-    if not idx then return nil end
-
-    local chosen = list[idx]
-
-    if chosen.attrType == "name" then
-        clear()
-        W, H = term.getSize()
-        bar(1, " Name filter")
-        local pattern = input("Item name contains: ", 3)
-        if pattern and pattern ~= "" then
-            return { type = "attribute", attrType = "name", pattern = pattern:lower(), label = "Name contains '" .. pattern .. "'" }
-        end
-        return nil
-    end
-
-    return { type = "attribute", attrType = chosen.attrType, key = chosen.attr.key, label = chosen.label, attr = chosen.attr }
+    return list
 end
 
 ----------------------------------------------------------------------
@@ -409,8 +486,8 @@ local function ruleLabel(rule)
         return "Keep " .. rule.count .. "x " .. (rule.displayName or rule.item)
     elseif rule.type == "tag" then
         return "Send all [" .. rule.tag .. "]"
-    elseif rule.type == "attribute" then
-        return "Send all: " .. (rule.label or rule.key or "?")
+    elseif rule.type == "group" then
+        return "Group: " .. rule.name .. " (" .. #rule.items .. " items)"
     end
     return "???"
 end
@@ -463,7 +540,7 @@ local function editDestination(dest, data)
         table.insert(items, { label = "" })
         table.insert(items, { label = "[+] Keep X of item...", action = "add_item" })
         table.insert(items, { label = "[+] Send all with tag...", action = "add_tag" })
-        table.insert(items, { label = "[+] Send all by attribute...", action = "add_attr" })
+        table.insert(items, { label = "[+] Custom item group...", action = "add_group" })
         table.insert(items, { label = "[R] Rename", action = "rename" })
         table.insert(items, { label = "[D] Delete container", action = "delete" })
 
@@ -486,7 +563,6 @@ local function editDestination(dest, data)
         local it = items[idx]
 
         if it.action == "info" then
-            -- Show detailed sensor inventory
             if sensor then
                 local invItems = {}
                 for name, count in pairs(sensor.items) do
@@ -566,26 +642,40 @@ local function editDestination(dest, data)
                 config.save(data)
             end
 
-        elseif it.action == "add_attr" then
-            local result = browseAttributes()
-            if result then
-                local rule = {
-                    type = "attribute",
-                    attrType = result.attrType,
-                    label = result.label,
-                    enabled = true,
-                }
-                if result.attrType == "name" then
-                    rule.pattern = result.pattern
-                elseif result.attrType == "tag_attr" then
-                    rule.tag = result.attr.tag
-                    rule.tagPattern = result.attr.tagPattern
-                    rule.key = result.key
+        elseif it.action == "add_group" then
+            clear()
+            W, H = term.getSize()
+            bar(1, " New item group")
+            local name = input("Group name (e.g. Crushable): ", 3)
+            if name and name ~= "" then
+                clear()
+                W, H = term.getSize()
+                bar(1, " Scanning network...")
+                at(2, 3, "Please wait...", C.dim)
+
+                local netItems = getNetworkItemList()
+                if #netItems == 0 then
+                    at(2, 5, "No items found on network", C.err)
+                    os.sleep(1.5)
                 else
-                    rule.key = result.key
+                    local selected = multiPick("Add items to \"" .. name .. "\"", netItems, {})
+                    if selected then
+                        local itemList = {}
+                        for itemName, displayName in pairs(selected) do
+                            table.insert(itemList, { name = itemName, displayName = displayName })
+                        end
+                        table.sort(itemList, function(a, b) return a.displayName < b.displayName end)
+                        if #itemList > 0 then
+                            table.insert(dest.rules, {
+                                type = "group",
+                                name = name,
+                                items = itemList,
+                                enabled = true,
+                            })
+                            config.save(data)
+                        end
+                    end
                 end
-                table.insert(dest.rules, rule)
-                config.save(data)
             end
 
         elseif it.action == "rename" then
@@ -620,6 +710,9 @@ local function editDestination(dest, data)
             local actions = { "Toggle on/off", "Remove rule" }
             if rule.type == "item" then
                 table.insert(actions, 1, "Change amount")
+            elseif rule.type == "group" then
+                table.insert(actions, 1, "Edit items")
+                table.insert(actions, 2, "Change name")
             end
             local choice = pick("Edit: " .. ruleLabel(rule), actions, "Enter:Select  Q:Cancel")
             if choice then
@@ -634,6 +727,39 @@ local function editDestination(dest, data)
                     val = tonumber(val)
                     if val and val > 0 then
                         rule.count = math.floor(val)
+                        config.save(data)
+                    end
+                elseif action == "Edit items" then
+                    clear()
+                    W, H = term.getSize()
+                    bar(1, " Scanning network...")
+                    at(2, 3, "Please wait...", C.dim)
+
+                    local netItems = getNetworkItemList()
+                    if #netItems > 0 then
+                        -- Pre-populate selected from current group
+                        local selected = {}
+                        for _, gi in ipairs(rule.items) do
+                            selected[gi.name] = gi.displayName
+                        end
+                        local result = multiPick("Edit \"" .. rule.name .. "\"", netItems, selected)
+                        if result then
+                            local itemList = {}
+                            for itemName, displayName in pairs(result) do
+                                table.insert(itemList, { name = itemName, displayName = displayName })
+                            end
+                            table.sort(itemList, function(a, b) return a.displayName < b.displayName end)
+                            rule.items = itemList
+                            config.save(data)
+                        end
+                    end
+                elseif action == "Change name" then
+                    clear()
+                    W, H = term.getSize()
+                    bar(1, " Rename group")
+                    local name = input("New group name: ", 3, rule.name)
+                    if name and name ~= "" then
+                        rule.name = name
                         config.save(data)
                     end
                 elseif action == "Toggle on/off" then

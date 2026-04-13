@@ -104,58 +104,16 @@ function network.getTaggedStock(tag)
     return result
 end
 
--- Get items matching an attribute rule from network stock
-function network.getAttributeStock(rule)
+-- Get network stock as a map: item name -> count
+function network.getStockMap()
     local stock = network.getStock()
-    local matches = {}
-
+    local map = {}
     for _, item in ipairs(stock) do
-        local match = false
-
-        if rule.attrType == "name" then
-            match = item.name and item.name:lower():find(rule.pattern, 1, true)
-
-        elseif rule.attrType == "tag_attr" then
-            if item.tags then
-                if rule.tag and item.tags[rule.tag] then
-                    match = true
-                end
-                if not match and rule.tagPattern then
-                    for tag in pairs(item.tags) do
-                        if tag:lower():find(rule.tagPattern:lower(), 1, true) then
-                            match = true
-                            break
-                        end
-                    end
-                end
-            end
-
-        elseif rule.attrType == "detail" then
-            if rule.key == "fuel" then
-                match = item.tags and (item.tags["minecraft:coals"] or item.tags["c:fuels"])
-            elseif rule.key == "damaged" then
-                match = item.damage and item.damage > 0
-            elseif rule.key == "damageable" then
-                match = item.maxDamage and item.maxDamage > 0
-            elseif rule.key == "enchanted" then
-                match = item.enchantments and #item.enchantments > 0
-            elseif rule.key == "stackable" then
-                match = item.maxCount and item.maxCount > 1
-            elseif rule.key == "unstackable" then
-                match = item.maxCount and item.maxCount == 1
-            elseif rule.key == "food" then
-                match = item.tags and (item.tags["c:foods"] or item.tags["minecraft:foods"])
-            elseif rule.key == "ore" then
-                match = item.tags and item.tags["c:ores"]
-            end
-        end
-
-        if match and item.count and item.count > 0 then
-            table.insert(matches, { name = item.name, count = item.count })
+        if item.name then
+            map[item.name] = (map[item.name] or 0) + item.count
         end
     end
-
-    return matches
+    return map
 end
 
 -- Stock Ticker methods (for tag/item browsing)
