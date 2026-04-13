@@ -107,14 +107,28 @@ local function pick(title, items, hints, onKey)
         local _, key = os.pullEvent("key")
         if key == keys.up then
             sel = sel > 1 and sel - 1 or #items
+            -- Skip empty spacer lines
+            while sel > 0 and type(items[sel]) == "table" and items[sel].label == "" do
+                sel = sel > 1 and sel - 1 or #items
+            end
         elseif key == keys.down then
             sel = sel < #items and sel + 1 or 1
+            while sel <= #items and type(items[sel]) == "table" and items[sel].label == "" do
+                sel = sel < #items and sel + 1 or 1
+            end
         elseif key == keys.enter and #items > 0 then
-            return sel
+            if type(items[sel]) == "table" and items[sel].label == "" then
+                -- Don't select spacers
+            else
+                return sel
+            end
         elseif key == keys.q then
             return nil
         elseif onKey then
-            onKey(key, sel)
+            local result = onKey(key, sel)
+            if result == "refresh" then
+                sel = math.min(sel, math.max(1, #items))
+            end
         end
     end
 end
@@ -205,6 +219,10 @@ local function editDestination(dest, data)
                     local rule = dest.rules[items[sel].idx]
                     rule.enabled = not rule.enabled
                     config.save(data)
+                    -- Update the displayed status
+                    items[sel].right = rule.enabled and "ON" or "OFF"
+                    items[sel].rcol = rule.enabled and C.on or C.off
+                    return "refresh"
                 end
             end)
 
@@ -351,7 +369,6 @@ function ui.run(data)
         local idx = pick("Create Controller", items, "Enter:Edit  N:New  Q:Quit",
             function(key, sel)
                 if key == keys.n then
-                    -- shortcut to add
                     clear()
                     bar(1, " New destination")
                     local name = input("Name (e.g. Crusher): ", 3)
@@ -360,14 +377,26 @@ function ui.run(data)
                         bar(1, " New destination")
                         local addr = input("Frogport address: ", 3)
                         if addr and addr ~= "" then
-                            table.insert(data.destinations, {
-                                name = name,
-                                address = addr,
-                                rules = {},
-                            })
+                            local dest = { name = name, address = addr, rules = {} }
+                            table.insert(data.destinations, dest)
                             config.save(data)
+                            -- Rebuild list
+                            local newItems = {}
+                            for _, d in ipairs(data.destinations) do
+                                local active = 0
+                                for _, r in ipairs(d.rules) do
+                                    if r.enabled then active = active + 1 end
+                                end
+                                local right = active .. " rule" .. (active ~= 1 and "s" or "")
+                                table.insert(newItems, { label = d.name .. " -> " .. d.address, right = right, rcol = C.dim, dest = d })
+                            end
+                            table.insert(newItems, { label = "" })
+                            table.insert(newItems, { label = "[+] Add destination", action = "add" })
+                            for k in pairs(items) do items[k] = nil end
+                            for k, v in ipairs(newItems) do items[k] = v end
                         end
                     end
+                    return "refresh"
                 end
             end)
 

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init:*)",
+      "WebSearch",
+      "WebFetch(domain:wiki.createmod.net)",
+      "Bash(ls -la /home/luke/mc-cc-create-controller/*.lua)",
+      "Bash(wc -l /home/luke/mc-cc-create-controller/*.lua)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh auth:*)",
+      "Bash(git config:*)",
+      "Bash(gh repo:*)",
+      "Bash(git remote:*)",
+      "Bash(git push:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:modrinth.com)",
+      "WebFetch(domain:cccbridge.tweaked-programs.cc)",
+      "WebFetch(domain:cccbridge.kleinbox.dev)"
+    ]
+  }
+}
