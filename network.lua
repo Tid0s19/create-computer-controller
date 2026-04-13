@@ -81,6 +81,48 @@ function network.getItemsAt(address)
     return data.items or {}
 end
 
+-- How many of a specific item exist at locations OTHER than the given address?
+function network.getItemCountElsewhere(excludeAddress, itemName)
+    local total = 0
+    local now = os.clock()
+    for addr, data in pairs(sensors) do
+        if addr ~= excludeAddress and now - data.lastSeen < 30 then
+            if data.items and data.items[itemName] then
+                total = total + data.items[itemName]
+            end
+        end
+    end
+    return total
+end
+
+-- Get total count of items matching a tag at locations OTHER than the given address
+-- Needs the stock ticker's detailed data for tag info
+function network.getTagCountElsewhere(excludeAddress, tag)
+    local stock = network.getStock()
+    -- Build a set of item names that match this tag
+    local taggedItems = {}
+    for _, item in ipairs(stock) do
+        if item.tags and item.tags[tag] then
+            taggedItems[item.name] = true
+        end
+    end
+    -- Count how many of those items exist at other sensors
+    local total = 0
+    local now = os.clock()
+    for addr, data in pairs(sensors) do
+        if addr ~= excludeAddress and now - data.lastSeen < 30 then
+            if data.items then
+                for itemName, count in pairs(data.items) do
+                    if taggedItems[itemName] then
+                        total = total + count
+                    end
+                end
+            end
+        end
+    end
+    return total
+end
+
 -- Stock Ticker methods
 function network.getStock()
     if not ticker then return {} end
