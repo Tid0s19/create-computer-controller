@@ -1,5 +1,5 @@
 -- startup.lua — Create Controller
--- Place computer next to a Stock Ticker
+-- Place computer next to a Stock Ticker + attach wireless modem
 
 local config = require("config")
 local network = require("network")
@@ -13,7 +13,7 @@ print("Create Controller")
 print()
 term.setTextColour(colours.white)
 
-print("Connecting to Stock Ticker...")
+print("Connecting...")
 local ok, err = network.init()
 if not ok then
     term.setTextColour(colours.red)
@@ -21,8 +21,10 @@ if not ok then
     return
 end
 term.setTextColour(colours.lime)
-print("Connected!")
-os.sleep(0.3)
+print("Stock Ticker + Wireless Modem OK")
+term.setTextColour(colours.grey)
+print("Waiting for sensors...")
+os.sleep(1)
 
 local data = config.load()
 
@@ -33,6 +35,9 @@ parallel.waitForAny(
     end,
     function()
         router.run(data)
+    end,
+    function()
+        network.listenForSensors()
     end
 )
 

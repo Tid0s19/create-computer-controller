@@ -1,4 +1,4 @@
--- ui.lua — Simple terminal UI for Create Controller
+-- ui.lua — Terminal UI for Create Controller
 
 local config = require("config")
 local network = require("network")
@@ -6,7 +6,6 @@ local network = require("network")
 local ui = {}
 local W, H
 
--- Colours
 local C = {
     title   = colours.yellow,
     accent  = colours.cyan,
@@ -61,12 +60,17 @@ local function input(prompt, y, prefill)
 end
 
 ----------------------------------------------------------------------
--- Generic list picker — returns index or nil
+-- Generic list picker
 ----------------------------------------------------------------------
 
 local function pick(title, items, hints, onKey)
     local sel, scroll = 1, 0
     local rows = H - 4
+
+    -- Skip initial spacers
+    while sel <= #items and type(items[sel]) == "table" and items[sel].label == "" do
+        sel = sel + 1
+    end
 
     while true do
         W, H = term.getSize()
@@ -107,7 +111,6 @@ local function pick(title, items, hints, onKey)
         local _, key = os.pullEvent("key")
         if key == keys.up then
             sel = sel > 1 and sel - 1 or #items
-            -- Skip empty spacer lines
             while sel > 0 and type(items[sel]) == "table" and items[sel].label == "" do
                 sel = sel > 1 and sel - 1 or #items
             end
@@ -117,9 +120,7 @@ local function pick(title, items, hints, onKey)
                 sel = sel < #items and sel + 1 or 1
             end
         elseif key == keys.enter and #items > 0 then
-            if type(items[sel]) == "table" and items[sel].label == "" then
-                -- Don't select spacers
-            else
+            if not (type(items[sel]) == "table" and items[sel].label == "") then
                 return sel
             end
         elseif key == keys.q then
@@ -134,7 +135,7 @@ local function pick(title, items, hints, onKey)
 end
 
 ----------------------------------------------------------------------
--- Browse network: pick an item
+-- Browse network items/tags
 ----------------------------------------------------------------------
 
 local function browseItems()
@@ -164,10 +165,6 @@ local function browseItems()
     return nil
 end
 
-----------------------------------------------------------------------
--- Browse network: pick a tag
-----------------------------------------------------------------------
-
 local function browseTags()
     clear()
     bar(1, " Scanning network...")
@@ -186,7 +183,42 @@ local function browseTags()
 end
 
 ----------------------------------------------------------------------
--- Edit a destination's rules
+-- Pick a destination address (from sensors or manual)
+----------------------------------------------------------------------
+
+local function pickAddress()
+    local addrs = network.getSensorAddresses()
+
+    local list = {}
+    for _, addr in ipairs(addrs) do
+        local sensor = network.getSensor(addr)
+        local info = ""
+        if sensor then
+            local count = 0
+            for _, c in pairs(sensor.items) do count = count + c end
+            info = count .. " items"
+        end
+        table.insert(list, { label = addr, right = info, rcol = C.dim, addr = addr })
+    end
+    table.insert(list, { label = "" })
+    table.insert(list, { label = "Type address manually...", action = "manual" })
+
+    local idx = pick("Select destination", list, "Enter:Select  Q:Cancel")
+    if not idx then return nil end
+
+    if list[idx].action == "manual" then
+        clear()
+        bar(1, " New destination")
+        local addr = input("Frogport address: ", 3)
+        if addr and addr ~= "" then return addr end
+        return nil
+    end
+
+    return list[idx].addr
+end
+
+----------------------------------------------------------------------
+-- Edit destination rules
 ----------------------------------------------------------------------
 
 local function ruleLabel(rule)
@@ -198,12 +230,47 @@ local function ruleLabel(rule)
     return "???"
 end
 
+local function ruleStatus(rule, address)
+    if not rule.enabled then return "OFF", C.off end
+    if rule.type == "item" then
+        local have = network.getItemCountAt(address, rule.item)
+        if have >= rule.count then
+            return have .. "/" .. rule.count, C.ok
+        else
+            return have .. "/" .. rule.count, C.accent
+        end
+    end
+    return "ON", C.on
+end
+
 local function editDestination(dest, data)
     while true do
         local items = {}
+        local sensor = network.getSensor(dest.address)
+
+        -- Sensor status line
+        if sensor then
+            local total = 0
+            for _, c in pairs(sensor.items) do total = total + c end
+            table.insert(items, {
+                label = "Sensor: online | " .. total .. " items | " .. sensor.freeSlots .. " free slots",
+                right = "",
+                rcol = C.dim,
+                action = "info"
+            })
+        else
+            table.insert(items, {
+                label = "Sensor: offline (no data)",
+                right = "!",
+                rcol = C.err,
+                action = "info"
+            })
+        end
+        table.insert(items, { label = "" })
+
+        -- Rules
         for i, rule in ipairs(dest.rules) do
-            local status = rule.enabled and "ON" or "OFF"
-            local scol = rule.enabled and C.on or C.off
+            local status, scol = ruleStatus(rule, dest.address)
             table.insert(items, { label = ruleLabel(rule), right = status, rcol = scol, idx = i })
         end
         table.insert(items, { label = "" })
@@ -213,15 +280,15 @@ local function editDestination(dest, data)
         table.insert(items, { label = "[D] Delete destination", action = "delete" })
 
         local idx = pick(dest.name .. " (" .. dest.address .. ")", items,
-            "Enter:Edit  E:Toggle  X:Remove  Q:Back",
+            "Enter:Edit  E:Toggle  Q:Back",
             function(key, sel)
                 if key == keys.e and items[sel] and items[sel].idx then
                     local rule = dest.rules[items[sel].idx]
                     rule.enabled = not rule.enabled
                     config.save(data)
-                    -- Update the displayed status
-                    items[sel].right = rule.enabled and "ON" or "OFF"
-                    items[sel].rcol = rule.enabled and C.on or C.off
+                    local status, scol = ruleStatus(rule, dest.address)
+                    items[sel].right = status
+                    items[sel].rcol = scol
                     return "refresh"
                 end
             end)
@@ -230,11 +297,23 @@ local function editDestination(dest, data)
 
         local it = items[idx]
 
-        if it.action == "add_item" then
-            -- Add "keep X of item" rule
+        if it.action == "info" then
+            -- Show detailed sensor inventory
+            if sensor then
+                local invItems = {}
+                for name, count in pairs(sensor.items) do
+                    table.insert(invItems, { label = name, right = tostring(count), rcol = C.dim })
+                end
+                table.sort(invItems, function(a, b) return a.label < b.label end)
+                if #invItems == 0 then
+                    table.insert(invItems, { label = "(empty)" })
+                end
+                pick("Inventory at " .. dest.address, invItems, "Q:Back")
+            end
+
+        elseif it.action == "add_item" then
             clear()
             bar(1, " Add item rule")
-            at(2, 3, "Browse network or type manually?", C.dim)
             local list = { "Browse network items", "Type item ID manually" }
             local choice = pick("Add item rule", list, "Enter:Select  Q:Cancel")
 
@@ -252,7 +331,11 @@ local function editDestination(dest, data)
                 clear()
                 bar(1, " Add item rule")
                 at(2, 3, "Item: " .. (displayName or itemName), C.accent)
-                local countStr = input("How many to keep: ", 5)
+                local have = network.getItemCountAt(dest.address, itemName)
+                if have > 0 then
+                    at(2, 4, "Currently at destination: " .. have, C.dim)
+                end
+                local countStr = input("How many to keep stocked: ", 6)
                 local count = tonumber(countStr)
                 if count and count > 0 then
                     table.insert(dest.rules, {
@@ -267,7 +350,6 @@ local function editDestination(dest, data)
             end
 
         elseif it.action == "add_tag" then
-            -- Add "send all with tag" rule
             clear()
             bar(1, " Add tag rule")
             local list = { "Browse network tags", "Type tag manually" }
@@ -317,7 +399,6 @@ local function editDestination(dest, data)
             end
 
         elseif it.idx then
-            -- Edit existing rule
             local rule = dest.rules[it.idx]
             local actions = { "Toggle on/off", "Remove rule" }
             if rule.type == "item" then
@@ -329,7 +410,9 @@ local function editDestination(dest, data)
                 if action == "Change amount" then
                     clear()
                     bar(1, " Change amount")
-                    local val = input("New amount: ", 3, tostring(rule.count))
+                    local have = network.getItemCountAt(dest.address, rule.item)
+                    at(2, 3, "Currently at destination: " .. have, C.dim)
+                    local val = input("New amount to keep: ", 5, tostring(rule.count))
                     val = tonumber(val)
                     if val and val > 0 then
                         rule.count = math.floor(val)
@@ -356,12 +439,17 @@ function ui.run(data)
         W, H = term.getSize()
         local items = {}
         for _, dest in ipairs(data.destinations) do
-            local active = 0
-            for _, r in ipairs(dest.rules) do
-                if r.enabled then active = active + 1 end
+            local sensor = network.getSensor(dest.address)
+            local right
+            if sensor then
+                local total = 0
+                for _, c in pairs(sensor.items) do total = total + c end
+                right = total .. " items"
+            else
+                right = "no sensor"
             end
-            local right = active .. " rule" .. (active ~= 1 and "s" or "")
-            table.insert(items, { label = dest.name .. " -> " .. dest.address, right = right, rcol = C.dim, dest = dest })
+            local rcol = sensor and C.dim or C.err
+            table.insert(items, { label = dest.name .. " -> " .. dest.address, right = right, rcol = rcol, dest = dest })
         end
         table.insert(items, { label = "" })
         table.insert(items, { label = "[+] Add destination", action = "add" })
@@ -373,22 +461,25 @@ function ui.run(data)
                     bar(1, " New destination")
                     local name = input("Name (e.g. Crusher): ", 3)
                     if name and name ~= "" then
-                        clear()
-                        bar(1, " New destination")
-                        local addr = input("Frogport address: ", 3)
-                        if addr and addr ~= "" then
+                        local addr = pickAddress()
+                        if addr then
                             local dest = { name = name, address = addr, rules = {} }
                             table.insert(data.destinations, dest)
                             config.save(data)
                             -- Rebuild list
                             local newItems = {}
                             for _, d in ipairs(data.destinations) do
-                                local active = 0
-                                for _, r in ipairs(d.rules) do
-                                    if r.enabled then active = active + 1 end
+                                local sensor = network.getSensor(d.address)
+                                local right
+                                if sensor then
+                                    local total = 0
+                                    for _, c in pairs(sensor.items) do total = total + c end
+                                    right = total .. " items"
+                                else
+                                    right = "no sensor"
                                 end
-                                local right = active .. " rule" .. (active ~= 1 and "s" or "")
-                                table.insert(newItems, { label = d.name .. " -> " .. d.address, right = right, rcol = C.dim, dest = d })
+                                local rcol = sensor and C.dim or C.err
+                                table.insert(newItems, { label = d.name .. " -> " .. d.address, right = right, rcol = rcol, dest = d })
                             end
                             table.insert(newItems, { label = "" })
                             table.insert(newItems, { label = "[+] Add destination", action = "add" })
@@ -411,10 +502,8 @@ function ui.run(data)
             bar(1, " New destination")
             local name = input("Name (e.g. Crusher): ", 3)
             if name and name ~= "" then
-                clear()
-                bar(1, " New destination")
-                local addr = input("Frogport address: ", 3)
-                if addr and addr ~= "" then
+                local addr = pickAddress()
+                if addr then
                     table.insert(data.destinations, {
                         name = name,
                         address = addr,
