@@ -49,10 +49,18 @@ function router.run(data)
                         end
 
                     elseif rule.type == "group" then
-                        if sensor.freeSlots > 0 then
+                        -- Look up global group by name
+                        local group = nil
+                        for _, g in ipairs(data.groups or {}) do
+                            if g.name == rule.groupName then
+                                group = g
+                                break
+                            end
+                        end
+                        if group and sensor.freeSlots > 0 then
                             local budget = sensor.freeSlots * 64
                             local stockMap = network.getStockMap()
-                            for _, groupItem in ipairs(rule.items) do
+                            for _, groupItem in ipairs(group.items) do
                                 if budget <= 0 then break end
                                 local inStock = stockMap[groupItem.name] or 0
                                 local atDest = network.getItemCountAt(dest.address, groupItem.name)

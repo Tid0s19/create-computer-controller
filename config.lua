@@ -12,9 +12,10 @@ function config.load()
     f.close()
     local ok, data = pcall(textutils.unserialiseJSON, raw)
     if ok and data and data.destinations then
+        if not data.groups then data.groups = {} end
         return data
     end
-    return { destinations = {} }
+    return { destinations = {}, groups = {} }
 end
 
 function config.save(data)
