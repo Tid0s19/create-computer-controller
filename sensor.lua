@@ -17,14 +17,7 @@ local function getAddress()
         if addr and addr ~= "" then return addr:match("^%s*(.-)%s*$") end
     end
 
-    -- Check command line args
-    local args = { ... }
-    if args[1] and args[1] ~= "" then
-        local f = fs.open(CONFIG_FILE, "w")
-        f.write(args[1])
-        f.close()
-        return args[1]
-    end
+    -- No saved config, go straight to prompt
 
     -- Prompt
     term.clear()
