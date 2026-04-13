@@ -8,13 +8,14 @@ local files = {
     "config.lua",
     "network.lua",
     "router.lua",
+    "display.lua",
     "ui.lua",
 }
 
 term.clear()
 term.setCursorPos(1, 1)
 term.setTextColour(colours.yellow)
-print("Create Controller Installer")
+print("Configure Storage - Installer")
 print()
 term.setTextColour(colours.white)
 
@@ -56,6 +57,8 @@ else
     print("This computer needs:")
     print("  - Adjacent to a Stock Ticker")
     print("  - Wireless modem attached")
+    print("  - Monitor (optional, shows all")
+    print("    containers & fill levels)")
     print()
     print("At each destination, place a")
     print("sensor computer next to the")

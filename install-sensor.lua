@@ -6,9 +6,11 @@ local repo = "https://raw.githubusercontent.com/Tid0s19/create-computer-controll
 term.clear()
 term.setCursorPos(1, 1)
 term.setTextColour(colours.yellow)
-print("Create Controller - Sensor Install")
+print("Configure Storage - Sensor Install")
 print()
 term.setTextColour(colours.white)
+
+local failed = false
 
 -- Download sensor.lua as startup.lua so it auto-runs
 write("  Downloading sensor... ")
@@ -23,23 +25,52 @@ end)
 if ok and fs.exists("startup.lua") then
     term.setTextColour(colours.lime)
     print("OK")
-    print()
-    term.setTextColour(colours.white)
+else
+    term.setTextColour(colours.red)
+    print("FAILED")
+    failed = true
+end
+
+-- Download display module
+term.setTextColour(colours.grey)
+write("  Downloading display... ")
+if fs.exists("display.lua") then
+    fs.delete("display.lua")
+end
+
+local ok2 = pcall(function()
+    shell.run("wget", repo .. "display.lua", "display.lua")
+end)
+
+if ok2 and fs.exists("display.lua") then
+    term.setTextColour(colours.lime)
+    print("OK")
+else
+    term.setTextColour(colours.red)
+    print("FAILED")
+    failed = true
+end
+
+print()
+if failed then
+    term.setTextColour(colours.red)
+    print("Some files failed to download.")
+    print("Check HTTP is enabled.")
+else
+    term.setTextColour(colours.lime)
     print("Sensor installed!")
     print()
+    term.setTextColour(colours.white)
     print("Place this computer next to:")
     print("  - A wireless modem")
     print("  - The destination chest/barrel")
-    print("  (no packager needed)")
+    print("  - Monitor (optional, shows")
+    print("    inventory & fill level)")
     print()
     print("Then reboot. It will ask for the")
     print("frogport address on first run.")
     print()
     term.setTextColour(colours.grey)
     print("Type: reboot")
-else
-    term.setTextColour(colours.red)
-    print("FAILED")
-    print("Check HTTP is enabled.")
 end
 term.setTextColour(colours.white)

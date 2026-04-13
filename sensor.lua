@@ -1,7 +1,6 @@
 -- sensor.lua — Inventory reporter for Create Controller
 -- Place computer touching: wireless modem + chest/barrel
--- Reports chest inventory to the controller so it knows
--- what's at this frogport destination.
+-- Optional: attach a monitor to display inventory & fill level
 
 local CHANNEL_CTRL = 4200   -- controller listens here
 local CHANNEL_SENSOR = 4201 -- sensors listen + broadcast here
@@ -59,6 +58,10 @@ local function findInventory()
     return nil
 end
 
+local function findMonitor()
+    return peripheral.find("monitor")
+end
+
 ----------------------------------------------------------------------
 -- Inventory reading
 ----------------------------------------------------------------------
@@ -110,6 +113,12 @@ if not inv then
     return
 end
 
+-- Optional monitor
+local mon = findMonitor()
+
+-- Try to load display module (downloaded with sensor installer)
+local hasDisplay, display = pcall(require, "display")
+
 -- Display status
 term.clear()
 term.setCursorPos(1, 1)
@@ -117,6 +126,13 @@ term.setTextColour(colours.yellow)
 print("Sensor: " .. address)
 term.setTextColour(colours.white)
 print("Chest: " .. invName)
+if mon then
+    term.setTextColour(colours.lime)
+    print("Monitor: attached")
+else
+    term.setTextColour(colours.grey)
+    print("Monitor: none")
+end
 print()
 term.setTextColour(colours.lime)
 print("Running...")
@@ -136,6 +152,12 @@ while true do
             usedSlots = usedSlots,
             freeSlots = totalSlots - usedSlots,
         })
+
+        -- Update monitor if present
+        if not mon then mon = findMonitor() end
+        if mon and hasDisplay then
+            pcall(display.sensor, mon, address, items, totalSlots, usedSlots)
+        end
     end
     os.sleep(BROADCAST_INTERVAL)
 end

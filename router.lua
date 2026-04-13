@@ -47,6 +47,21 @@ function router.run(data)
                                 end
                             end
                         end
+
+                    elseif rule.type == "attribute" then
+                        if sensor.freeSlots > 0 then
+                            local budget = sensor.freeSlots * 64
+                            local matched = network.getAttributeStock(rule)
+                            for _, item in ipairs(matched) do
+                                if budget <= 0 then break end
+                                local atDest = network.getItemCountAt(dest.address, item.name)
+                                local toRequest = math.min(item.count - atDest, budget)
+                                if toRequest > 0 then
+                                    network.requestItems(dest.address, item.name, toRequest)
+                                    budget = budget - toRequest
+                                end
+                            end
+                        end
                     end
 
                     ::nextRule::
