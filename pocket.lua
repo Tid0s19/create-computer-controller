@@ -1,0 +1,201 @@
+-- pocket.lua — Remote configuration client for Configure Storage
+-- Run on a wireless pocket computer to manage config on the move
+-- Connects to the server wirelessly to browse items, edit rules, etc.
+
+local CHANNEL_SERVER = 4202
+local REPLY_CHANNEL = 4203 + os.getComputerID()
+
+----------------------------------------------------------------------
+-- Setup
+----------------------------------------------------------------------
+
+local modem = peripheral.find("modem", function(_, w) return w.isWireless() end)
+if not modem then
+    term.setTextColour(colours.red)
+    print("No wireless modem found!")
+    return
+end
+modem.open(REPLY_CHANNEL)
+
+-- Send a request to the server and wait for a response
+local function request(msg, timeout)
+    timeout = timeout or 5
+    modem.transmit(CHANNEL_SERVER, REPLY_CHANNEL, msg)
+    local timer = os.startTimer(timeout)
+    while true do
+        local ev = {os.pullEvent()}
+        if ev[1] == "modem_message" and ev[4] == REPLY_CHANNEL and type(ev[5]) == "table" then
+            os.cancelTimer(timer)
+            return ev[5]
+        elseif ev[1] == "timer" and ev[2] == timer then
+            return nil
+        end
+    end
+end
+
+----------------------------------------------------------------------
+-- Connect
+----------------------------------------------------------------------
+
+term.clear()
+term.setCursorPos(1, 1)
+term.setTextColour(colours.yellow)
+print("Configure Storage")
+print("  Pocket Client")
+print()
+term.setTextColour(colours.white)
+print("Connecting to server...")
+
+local resp = request({type = "ping"})
+if not resp or resp.type ~= "pong" then
+    term.setTextColour(colours.red)
+    print("No server found!")
+    print()
+    print("Make sure the server is")
+    print("running and within wireless")
+    print("range (~64 blocks).")
+    return
+end
+term.setTextColour(colours.lime)
+print("Connected!")
+
+print("Loading config...")
+local configResp = request({type = "config_request"})
+if not configResp or not configResp.data then
+    term.setTextColour(colours.red)
+    print("Failed to load config!")
+    return
+end
+
+local data = configResp.data
+if not data.groups then data.groups = {} end
+if not data.destinations then data.destinations = {} end
+
+----------------------------------------------------------------------
+-- Proxy config module
+----------------------------------------------------------------------
+
+local configProxy = {}
+
+function configProxy.load()
+    return data
+end
+
+function configProxy.save(d)
+    data = d
+    request({type = "config_save", data = d}, 3)
+end
+
+package.loaded.config = configProxy
+
+----------------------------------------------------------------------
+-- Proxy network module (fetches from server)
+----------------------------------------------------------------------
+
+local sensorCache = {}
+local stockCache = nil
+local stockCacheTime = 0
+
+local function refreshSensors()
+    local resp = request({type = "get_sensors"}, 3)
+    if resp and resp.sensors then
+        sensorCache = resp.sensors
+    end
+end
+
+local function refreshStock()
+    local now = os.clock()
+    if stockCache and now - stockCacheTime < 10 then return end
+    local resp = request({type = "get_stock"}, 5)
+    if resp and resp.stock then
+        stockCache = resp.stock
+        stockCacheTime = now
+    end
+end
+
+local networkProxy = {}
+
+function networkProxy.init() return true end
+function networkProxy.hasTicker() return true end
+
+function networkProxy.getSensorAddresses()
+    refreshSensors()
+    local addrs = {}
+    for addr in pairs(sensorCache) do
+        table.insert(addrs, addr)
+    end
+    table.sort(addrs)
+    return addrs
+end
+
+function networkProxy.getSensor(address)
+    refreshSensors()
+    return sensorCache[address]
+end
+
+function networkProxy.getItemCountAt(address, itemName)
+    refreshSensors()
+    local s = sensorCache[address]
+    if not s or not s.items then return 0 end
+    return s.items[itemName] or 0
+end
+
+function networkProxy.getStock()
+    refreshStock()
+    return stockCache or {}
+end
+
+function networkProxy.getAllItems()
+    refreshStock()
+    if not stockCache then return {} end
+    local seen = {}
+    local result = {}
+    for _, item in ipairs(stockCache) do
+        if item.name and not seen[item.name] then
+            seen[item.name] = true
+            table.insert(result, {
+                name = item.name,
+                displayName = item.displayName or item.name,
+                count = item.count,
+            })
+        end
+    end
+    table.sort(result, function(a, b) return a.displayName < b.displayName end)
+    return result
+end
+
+function networkProxy.getAllTags()
+    refreshStock()
+    if not stockCache then return {} end
+    local tagSet = {}
+    for _, item in ipairs(stockCache) do
+        if item.tags then
+            for tag in pairs(item.tags) do
+                tagSet[tag] = true
+            end
+        end
+    end
+    local tags = {}
+    for tag in pairs(tagSet) do
+        table.insert(tags, tag)
+    end
+    table.sort(tags)
+    return tags
+end
+
+package.loaded.network = networkProxy
+
+----------------------------------------------------------------------
+-- Run UI
+----------------------------------------------------------------------
+
+term.setTextColour(colours.grey)
+print("Starting UI...")
+os.sleep(0.5)
+
+local ui = require("ui")
+ui.run(data)
+
+term.clear()
+term.setCursorPos(1, 1)
+print("Disconnected.")

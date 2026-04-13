@@ -116,6 +116,11 @@ function network.getStockMap()
     return map
 end
 
+-- Expose modem for other modules (pocket server, etc.)
+function network.getModem()
+    return modem
+end
+
 -- Stock Ticker methods (for tag/item browsing)
 function network.getStock()
     if not ticker then return {} end
