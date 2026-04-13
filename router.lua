@@ -1,7 +1,6 @@
--- router.lua — Smart routing via sensor-to-sensor transfers
--- No more Stock Ticker for moving items. The controller finds
--- which sensor has the items needed and commands it to ship
--- them via its Packager.
+-- router.lua — Routing via Stock Ticker requestFiltered
+-- The controller checks destination sensors for shortfalls,
+-- then uses the Stock Ticker to request items from the network.
 
 local network = require("network")
 
@@ -31,38 +30,13 @@ function router.run(data)
                         local have = network.getItemCountAt(dest.address, rule.item)
                         local shortfall = rule.count - have
                         if shortfall > 0 then
-                            -- Find sources that have this item
-                            local sources = network.findItemSources(rule.item, dest.address)
-                            local remaining = shortfall
-                            for _, source in ipairs(sources) do
-                                if remaining <= 0 then break end
-                                local toSend = math.min(remaining, source.count)
-                                network.commandSend(
-                                    source.address,
-                                    dest.address,
-                                    rule.item,
-                                    toSend
-                                )
-                                remaining = remaining - toSend
-                            end
+                            network.requestItems(dest.address, rule.item, shortfall)
                         end
 
                     elseif rule.type == "tag" then
                         if sensor.freeSlots > 0 then
-                            -- Find sources with tagged items
-                            local sources = network.findTagSources(rule.tag, dest.address)
                             local budget = sensor.freeSlots * 64
-                            for _, source in ipairs(sources) do
-                                if budget <= 0 then break end
-                                local toSend = math.min(budget, source.count)
-                                network.commandSend(
-                                    source.address,
-                                    dest.address,
-                                    source.item,
-                                    toSend
-                                )
-                                budget = budget - toSend
-                            end
+                            network.requestTagged(dest.address, rule.tag, budget)
                         end
                     end
 

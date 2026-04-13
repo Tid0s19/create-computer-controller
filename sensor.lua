@@ -1,11 +1,7 @@
--- sensor.lua — Worker node for Create Controller
--- Place computer touching: wireless modem + chest/barrel + Packager
--- The Packager should connect to a Frogport on the chain conveyor
---
--- This sensor:
---   1. Reports chest inventory to the controller
---   2. Listens for "send" commands from the controller
---   3. Moves specific items from chest → Packager and ships them
+-- sensor.lua — Inventory reporter for Create Controller
+-- Place computer touching: wireless modem + chest/barrel
+-- Reports chest inventory to the controller so it knows
+-- what's at this frogport destination.
 
 local CHANNEL_CTRL = 4200   -- controller listens here
 local CHANNEL_SENSOR = 4201 -- sensors listen + broadcast here
@@ -57,33 +53,7 @@ local function findInventory()
     for _, name in ipairs(peripheral.getNames()) do
         local p = peripheral.wrap(name)
         if p and p.list and p.size and p.pushItems then
-            -- It's an inventory with transfer support
-            -- Make sure it's not the packager
-            local types = { peripheral.getType(name) }
-            local isPackager = false
-            for _, t in ipairs(types) do
-                if t:find("packager") or t:find("Packager") then
-                    isPackager = true
-                end
-            end
-            if not isPackager then
-                return p, name
-            end
-        end
-    end
-    return nil
-end
-
-local function findPackager()
-    for _, name in ipairs(peripheral.getNames()) do
-        local types = { peripheral.getType(name) }
-        for _, t in ipairs(types) do
-            if t:find("ackager") then
-                local p = peripheral.wrap(name)
-                if p and p.makePackage and p.setAddress then
-                    return p, name
-                end
-            end
+            return p, name
         end
     end
     return nil
@@ -117,40 +87,6 @@ local function readInventory(inv)
 end
 
 ----------------------------------------------------------------------
--- Send items via Packager
-----------------------------------------------------------------------
-
-local function sendItems(inv, invName, packager, packagerName, targetAddress, itemName, count)
-    -- Set the packager to send to the target address
-    packager.setAddress(targetAddress)
-
-    -- Find slots in the chest containing the requested item
-    local ok, contents = pcall(inv.list)
-    if not ok or not contents then return 0 end
-
-    local sent = 0
-    for slot, item in pairs(contents) do
-        if item.name == itemName and sent < count then
-            local toMove = math.min(item.count, count - sent)
-            -- Push items from chest to packager
-            local moved = inv.pushItems(packagerName, slot, toMove)
-            if moved and moved > 0 then
-                sent = sent + moved
-            end
-        end
-        if sent >= count then break end
-    end
-
-    -- Trigger the packager to create and send the package
-    if sent > 0 then
-        os.sleep(0.2) -- brief pause for items to settle
-        pcall(packager.makePackage)
-    end
-
-    return sent
-end
-
-----------------------------------------------------------------------
 -- Main
 ----------------------------------------------------------------------
 
@@ -174,8 +110,6 @@ if not inv then
     return
 end
 
-local packager, packagerName = findPackager()
-
 -- Display status
 term.clear()
 term.setCursorPos(1, 1)
@@ -183,76 +117,25 @@ term.setTextColour(colours.yellow)
 print("Sensor: " .. address)
 term.setTextColour(colours.white)
 print("Chest: " .. invName)
-if packager then
-    term.setTextColour(colours.lime)
-    print("Packager: " .. packagerName)
-else
-    term.setTextColour(colours.red)
-    print("Packager: NOT FOUND")
-    print("  (can receive but not send)")
-end
 print()
 term.setTextColour(colours.lime)
 print("Running...")
 term.setTextColour(colours.grey)
 print("Hold Ctrl+T to stop")
 
--- Run broadcast + command listener in parallel
-parallel.waitForAny(
-    -- Broadcast inventory periodically
-    function()
-        while true do
-            inv = findInventory() or inv
-            if inv then
-                local items, totalSlots, usedSlots = readInventory(inv)
-                modem.transmit(CHANNEL_SENSOR, CHANNEL_CTRL, {
-                    type = "sensor_report",
-                    address = address,
-                    items = items,
-                    totalSlots = totalSlots,
-                    usedSlots = usedSlots,
-                    freeSlots = totalSlots - usedSlots,
-                    canSend = packager ~= nil,
-                })
-            end
-            os.sleep(BROADCAST_INTERVAL)
-        end
-    end,
-
-    -- Listen for commands from controller
-    function()
-        while true do
-            local event, side, channel, replyChannel, message = os.pullEvent("modem_message")
-            if channel == CHANNEL_SENSOR and type(message) == "table"
-               and message.type == "send_command"
-               and message.fromAddress == address then
-
-                local result = 0
-                if packager and inv then
-                    -- Refresh inventory reference
-                    inv, invName = findInventory()
-                    packager, packagerName = findPackager()
-                    if inv and packager then
-                        result = sendItems(
-                            inv, invName,
-                            packager, packagerName,
-                            message.toAddress,
-                            message.item,
-                            message.count
-                        )
-                    end
-                end
-
-                -- Report back
-                modem.transmit(CHANNEL_CTRL, CHANNEL_SENSOR, {
-                    type = "send_result",
-                    fromAddress = address,
-                    toAddress = message.toAddress,
-                    item = message.item,
-                    requested = message.count,
-                    sent = result,
-                })
-            end
-        end
+-- Broadcast inventory periodically
+while true do
+    inv = findInventory() or inv
+    if inv then
+        local items, totalSlots, usedSlots = readInventory(inv)
+        modem.transmit(CHANNEL_SENSOR, CHANNEL_CTRL, {
+            type = "sensor_report",
+            address = address,
+            items = items,
+            totalSlots = totalSlots,
+            usedSlots = usedSlots,
+            freeSlots = totalSlots - usedSlots,
+        })
     end
-)
+    os.sleep(BROADCAST_INTERVAL)
+end

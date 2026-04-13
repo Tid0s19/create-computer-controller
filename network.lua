@@ -1,4 +1,4 @@
--- network.lua — Wireless sensor network + Stock Ticker for tag lookups
+-- network.lua — Wireless sensor network + Stock Ticker for transfers & tag lookups
 
 local network = {}
 local ticker = nil
@@ -12,7 +12,9 @@ local sensors = {}
 
 function network.init()
     ticker = peripheral.find("Create_StockTicker")
-    -- Stock Ticker is optional now — only needed for tag browsing
+    if not ticker then
+        return false, "No Stock Ticker found. Attach one to this computer."
+    end
 
     modem = peripheral.find("modem", function(_, wrapped)
         return wrapped.isWireless()
@@ -41,7 +43,6 @@ function network.listenForSensors()
                     totalSlots = message.totalSlots or 0,
                     usedSlots = message.usedSlots or 0,
                     freeSlots = message.freeSlots or 0,
-                    canSend = message.canSend or false,
                     lastSeen = os.clock(),
                 }
             end
@@ -77,70 +78,29 @@ function network.getItemCountAt(address, itemName)
     return data.items[itemName] or 0
 end
 
--- Find which sensors have a given item (excluding a specific address)
--- Returns list of { address, count } sorted by count descending
-function network.findItemSources(itemName, excludeAddress)
-    local sources = {}
-    local now = os.clock()
-    for addr, data in pairs(sensors) do
-        if addr ~= excludeAddress and now - data.lastSeen < 30
-           and data.canSend and data.items and data.items[itemName] then
-            table.insert(sources, {
-                address = addr,
-                count = data.items[itemName],
-            })
-        end
-    end
-    table.sort(sources, function(a, b) return a.count > b.count end)
-    return sources
-end
-
--- Find which sensors have items matching a tag (excluding a specific address)
--- Returns list of { address, item, count }
-function network.findTagSources(tag, excludeAddress)
-    if not ticker then return {} end
-
-    -- Get tagged item names from Stock Ticker
-    local stock = network.getStock()
-    local taggedItems = {}
-    for _, item in ipairs(stock) do
-        if item.tags and item.tags[tag] then
-            taggedItems[item.name] = true
-        end
-    end
-
-    local sources = {}
-    local now = os.clock()
-    for addr, data in pairs(sensors) do
-        if addr ~= excludeAddress and now - data.lastSeen < 30
-           and data.canSend and data.items then
-            for itemName, count in pairs(data.items) do
-                if taggedItems[itemName] and count > 0 then
-                    table.insert(sources, {
-                        address = addr,
-                        item = itemName,
-                        count = count,
-                    })
-                end
-            end
-        end
-    end
-    return sources
-end
-
--- Send a command to a sensor to ship items
-function network.commandSend(fromAddress, toAddress, itemName, count)
-    if not modem then return end
-    modem.transmit(CHANNEL_SENSOR, CHANNEL_CTRL, {
-        type = "send_command",
-        fromAddress = fromAddress,
-        toAddress = toAddress,
-        item = itemName,
-        count = count,
+-- Request items via Stock Ticker (sends package to frogport address)
+function network.requestItems(address, itemName, count)
+    if not ticker then return 0 end
+    local ok, result = pcall(ticker.requestFiltered, address, {
+        name = itemName,
+        _requestCount = count,
     })
+    if ok then return result or 0 end
+    return 0
 end
 
--- Stock Ticker methods (for tag/item browsing only)
+-- Request tagged items via Stock Ticker
+function network.requestTagged(address, tag, count)
+    if not ticker then return 0 end
+    local ok, result = pcall(ticker.requestFiltered, address, {
+        tags = { [tag] = true },
+        _requestCount = count,
+    })
+    if ok then return result or 0 end
+    return 0
+end
+
+-- Stock Ticker methods (for tag/item browsing)
 function network.getStock()
     if not ticker then return {} end
     local ok, result = pcall(ticker.stock, true)

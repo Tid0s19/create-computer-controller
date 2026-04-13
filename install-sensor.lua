@@ -30,6 +30,7 @@ if ok and fs.exists("startup.lua") then
     print("Place this computer next to:")
     print("  - A wireless modem")
     print("  - The destination chest/barrel")
+    print("  (no packager needed)")
     print()
     print("Then reboot. It will ask for the")
     print("frogport address on first run.")
