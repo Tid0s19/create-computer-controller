@@ -193,12 +193,15 @@ local function pickAddress()
     for _, addr in ipairs(addrs) do
         local sensor = network.getSensor(addr)
         local info = ""
+        local rcol = C.dim
         if sensor then
             local count = 0
             for _, c in pairs(sensor.items) do count = count + c end
-            info = count .. " items"
+            local mode = sensor.canSend and "send+recv" or "recv only"
+            info = count .. " items | " .. mode
+            rcol = sensor.canSend and C.dim or C.accent
         end
-        table.insert(list, { label = addr, right = info, rcol = C.dim, addr = addr })
+        table.insert(list, { label = addr, right = info, rcol = rcol, addr = addr })
     end
     table.insert(list, { label = "" })
     table.insert(list, { label = "Type address manually...", action = "manual" })
@@ -252,9 +255,10 @@ local function editDestination(dest, data)
         if sensor then
             local total = 0
             for _, c in pairs(sensor.items) do total = total + c end
+            local mode = sensor.canSend and "can send" or "recv only"
             table.insert(items, {
-                label = "Sensor: online | " .. total .. " items | " .. sensor.freeSlots .. " free slots",
-                right = "",
+                label = "Sensor: online | " .. total .. " items | " .. mode,
+                right = sensor.freeSlots .. " free",
                 rcol = C.dim,
                 action = "info"
             })

@@ -1,7 +1,7 @@
--- router.lua — Smart routing with sensor awareness
--- Checks inventory across ALL sensors before moving items.
--- Only requests items when they exist at OTHER locations,
--- preventing the destination from recycling its own stock.
+-- router.lua — Smart routing via sensor-to-sensor transfers
+-- No more Stock Ticker for moving items. The controller finds
+-- which sensor has the items needed and commands it to ship
+-- them via its Packager.
 
 local network = require("network")
 
@@ -22,36 +22,53 @@ function router.run(data)
             if not lastRun[i] or now - lastRun[i] >= 10 then
                 lastRun[i] = now
                 local sensor = network.getSensor(dest.address)
+                if not sensor then goto continue end
 
                 for _, rule in ipairs(dest.rules) do
-                    if rule.enabled and sensor then
-                        if rule.type == "item" then
-                            local have = network.getItemCountAt(dest.address, rule.item)
-                            local shortfall = rule.count - have
-                            if shortfall > 0 then
-                                -- Check if the item exists at OTHER locations
-                                local elsewhere = network.getItemCountElsewhere(dest.address, rule.item)
-                                if elsewhere > 0 then
-                                    -- Only request what's actually available elsewhere
-                                    local toSend = math.min(shortfall, elsewhere)
-                                    network.sendItem(dest.address, rule.item, toSend)
-                                end
-                                -- If elsewhere == 0, don't request — would just
-                                -- recycle items already at the destination
-                            end
+                    if not rule.enabled then goto nextRule end
 
-                        elseif rule.type == "tag" then
-                            if sensor.freeSlots > 0 then
-                                -- Check if tagged items exist at other locations
-                                local elsewhere = network.getTagCountElsewhere(dest.address, rule.tag)
-                                if elsewhere > 0 then
-                                    local maxSend = math.min(elsewhere, sensor.freeSlots * 64)
-                                    network.sendByTag(dest.address, rule.tag, maxSend)
-                                end
+                    if rule.type == "item" then
+                        local have = network.getItemCountAt(dest.address, rule.item)
+                        local shortfall = rule.count - have
+                        if shortfall > 0 then
+                            -- Find sources that have this item
+                            local sources = network.findItemSources(rule.item, dest.address)
+                            local remaining = shortfall
+                            for _, source in ipairs(sources) do
+                                if remaining <= 0 then break end
+                                local toSend = math.min(remaining, source.count)
+                                network.commandSend(
+                                    source.address,
+                                    dest.address,
+                                    rule.item,
+                                    toSend
+                                )
+                                remaining = remaining - toSend
+                            end
+                        end
+
+                    elseif rule.type == "tag" then
+                        if sensor.freeSlots > 0 then
+                            -- Find sources with tagged items
+                            local sources = network.findTagSources(rule.tag, dest.address)
+                            local budget = sensor.freeSlots * 64
+                            for _, source in ipairs(sources) do
+                                if budget <= 0 then break end
+                                local toSend = math.min(budget, source.count)
+                                network.commandSend(
+                                    source.address,
+                                    dest.address,
+                                    source.item,
+                                    toSend
+                                )
+                                budget = budget - toSend
                             end
                         end
                     end
+
+                    ::nextRule::
                 end
+                ::continue::
             end
         end
 

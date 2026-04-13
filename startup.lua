@@ -1,5 +1,5 @@
 -- startup.lua — Create Controller
--- Place computer next to a Stock Ticker + attach wireless modem
+-- Place computer with wireless modem (Stock Ticker optional, for tag browsing)
 
 local config = require("config")
 local network = require("network")
@@ -21,7 +21,13 @@ if not ok then
     return
 end
 term.setTextColour(colours.lime)
-print("Stock Ticker + Wireless Modem OK")
+print("Wireless modem OK")
+if network.hasTicker() then
+    print("Stock Ticker OK (tag browsing)")
+else
+    term.setTextColour(colours.yellow)
+    print("No Stock Ticker (tag browsing disabled)")
+end
 term.setTextColour(colours.grey)
 print("Waiting for sensors...")
 os.sleep(1)

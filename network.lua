@@ -1,56 +1,59 @@
--- network.lua — Stock Ticker + wireless sensor network
+-- network.lua — Wireless sensor network + Stock Ticker for tag lookups
 
 local network = {}
 local ticker = nil
 local modem = nil
 
-local CHANNEL = 4200       -- we listen on this
-local REPLY_CHANNEL = 4201 -- sensors broadcast on this
+local CHANNEL_CTRL = 4200   -- controller listens here
+local CHANNEL_SENSOR = 4201 -- sensors listen + broadcast here
 
 -- Sensor data: keyed by frogport address
--- Each entry: { items = {}, totalSlots = N, freeSlots = N, lastSeen = clock }
 local sensors = {}
 
 function network.init()
     ticker = peripheral.find("Create_StockTicker")
-    if not ticker then
-        return false, "No Stock Ticker found. Place computer next to one."
-    end
+    -- Stock Ticker is optional now — only needed for tag browsing
 
-    modem = peripheral.find("modem", function(name, wrapped)
+    modem = peripheral.find("modem", function(_, wrapped)
         return wrapped.isWireless()
     end)
     if not modem then
         return false, "No wireless modem found. Attach one to this computer."
     end
 
-    modem.open(REPLY_CHANNEL)
+    modem.open(CHANNEL_SENSOR)
+    modem.open(CHANNEL_CTRL)
     return true
+end
+
+function network.hasTicker()
+    return ticker ~= nil
 end
 
 -- Process incoming sensor messages (call from parallel loop)
 function network.listenForSensors()
     while true do
         local event, side, channel, replyChannel, message = os.pullEvent("modem_message")
-        if channel == REPLY_CHANNEL and type(message) == "table"
-           and message.type == "sensor_report" and message.address then
-            sensors[message.address] = {
-                items = message.items or {},
-                totalSlots = message.totalSlots or 0,
-                usedSlots = message.usedSlots or 0,
-                freeSlots = message.freeSlots or 0,
-                lastSeen = os.clock(),
-            }
+        if type(message) == "table" then
+            if message.type == "sensor_report" and message.address then
+                sensors[message.address] = {
+                    items = message.items or {},
+                    totalSlots = message.totalSlots or 0,
+                    usedSlots = message.usedSlots or 0,
+                    freeSlots = message.freeSlots or 0,
+                    canSend = message.canSend or false,
+                    lastSeen = os.clock(),
+                }
+            end
         end
     end
 end
 
--- Get all known sensor addresses (auto-discovered destinations)
+-- Get all known sensor addresses
 function network.getSensorAddresses()
     local addrs = {}
     local now = os.clock()
     for addr, data in pairs(sensors) do
-        -- Only include sensors seen in last 30 seconds
         if now - data.lastSeen < 30 then
             table.insert(addrs, addr)
         end
@@ -74,56 +77,70 @@ function network.getItemCountAt(address, itemName)
     return data.items[itemName] or 0
 end
 
--- Get all items currently at a destination
-function network.getItemsAt(address)
-    local data = network.getSensor(address)
-    if not data then return {} end
-    return data.items or {}
-end
-
--- How many of a specific item exist at locations OTHER than the given address?
-function network.getItemCountElsewhere(excludeAddress, itemName)
-    local total = 0
+-- Find which sensors have a given item (excluding a specific address)
+-- Returns list of { address, count } sorted by count descending
+function network.findItemSources(itemName, excludeAddress)
+    local sources = {}
     local now = os.clock()
     for addr, data in pairs(sensors) do
-        if addr ~= excludeAddress and now - data.lastSeen < 30 then
-            if data.items and data.items[itemName] then
-                total = total + data.items[itemName]
-            end
+        if addr ~= excludeAddress and now - data.lastSeen < 30
+           and data.canSend and data.items and data.items[itemName] then
+            table.insert(sources, {
+                address = addr,
+                count = data.items[itemName],
+            })
         end
     end
-    return total
+    table.sort(sources, function(a, b) return a.count > b.count end)
+    return sources
 end
 
--- Get total count of items matching a tag at locations OTHER than the given address
--- Needs the stock ticker's detailed data for tag info
-function network.getTagCountElsewhere(excludeAddress, tag)
+-- Find which sensors have items matching a tag (excluding a specific address)
+-- Returns list of { address, item, count }
+function network.findTagSources(tag, excludeAddress)
+    if not ticker then return {} end
+
+    -- Get tagged item names from Stock Ticker
     local stock = network.getStock()
-    -- Build a set of item names that match this tag
     local taggedItems = {}
     for _, item in ipairs(stock) do
         if item.tags and item.tags[tag] then
             taggedItems[item.name] = true
         end
     end
-    -- Count how many of those items exist at other sensors
-    local total = 0
+
+    local sources = {}
     local now = os.clock()
     for addr, data in pairs(sensors) do
-        if addr ~= excludeAddress and now - data.lastSeen < 30 then
-            if data.items then
-                for itemName, count in pairs(data.items) do
-                    if taggedItems[itemName] then
-                        total = total + count
-                    end
+        if addr ~= excludeAddress and now - data.lastSeen < 30
+           and data.canSend and data.items then
+            for itemName, count in pairs(data.items) do
+                if taggedItems[itemName] and count > 0 then
+                    table.insert(sources, {
+                        address = addr,
+                        item = itemName,
+                        count = count,
+                    })
                 end
             end
         end
     end
-    return total
+    return sources
 end
 
--- Stock Ticker methods
+-- Send a command to a sensor to ship items
+function network.commandSend(fromAddress, toAddress, itemName, count)
+    if not modem then return end
+    modem.transmit(CHANNEL_SENSOR, CHANNEL_CTRL, {
+        type = "send_command",
+        fromAddress = fromAddress,
+        toAddress = toAddress,
+        item = itemName,
+        count = count,
+    })
+end
+
+-- Stock Ticker methods (for tag/item browsing only)
 function network.getStock()
     if not ticker then return {} end
     local ok, result = pcall(ticker.stock, true)
@@ -165,29 +182,6 @@ function network.getAllItems()
     end
     table.sort(result, function(a, b) return a.displayName < b.displayName end)
     return result
-end
-
-function network.sendItem(address, itemName, count)
-    if not ticker then return 0 end
-    local ok, result = pcall(ticker.requestFiltered, address,
-        { name = itemName, _requestCount = count })
-    if ok and type(result) == "number" then
-        return result
-    end
-    return 0
-end
-
-function network.sendByTag(address, tag, maxCount)
-    if not ticker then return 0 end
-    local filter = { tags = { [tag] = true } }
-    if maxCount then
-        filter._requestCount = maxCount
-    end
-    local ok, result = pcall(ticker.requestFiltered, address, filter)
-    if ok and type(result) == "number" then
-        return result
-    end
-    return 0
 end
 
 return network
