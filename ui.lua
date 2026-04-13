@@ -37,21 +37,32 @@ end
 
 local function bar(y, text, fg)
     at(1, y, string.rep(" ", W), nil, colours.grey)
-    at(2, y, text, fg or C.title, colours.grey)
+    local t = #text > W - 2 and text:sub(1, W - 4) .. ".." or text
+    at(2, y, t, fg or C.title, colours.grey)
 end
 
 local function footer(text)
     at(1, H, string.rep(" ", W), C.dim, colours.black)
-    at(2, H, text, C.dim)
+    local t = #text > W - 2 and text:sub(1, W - 4) .. ".." or text
+    at(2, H, t, C.dim)
 end
 
 local function trunc(s, n)
+    if n < 4 then n = 4 end
     return #s > n and s:sub(1, n - 2) .. ".." or s
 end
 
 local function input(prompt, y, prefill)
-    at(2, y, prompt, C.accent)
-    term.setCursorPos(2 + #prompt, y)
+    local inputX = 2 + #prompt
+    if inputX >= W - 2 then
+        -- Prompt too long — put it above, input on next line
+        at(2, y, trunc(prompt, W - 2), C.accent)
+        y = y + 1
+        inputX = 2
+    else
+        at(2, y, prompt, C.accent)
+    end
+    term.setCursorPos(inputX, y)
     term.setTextColour(colours.white)
     term.setCursorBlink(true)
     local r = read(nil, nil, nil, prefill)
@@ -128,19 +139,21 @@ local function pick(title, items, hints, onKey, opts)
         bar(1, " " .. title)
 
         if searchable then
-            at(2, 3, "Search: ", C.accent)
-            at(10, 3, search, colours.white)
-            at(10 + #search, 3, "_", C.dim)
+            local maxSearch = W - 12
+            local shown = #search > maxSearch and search:sub(-maxSearch) or search
+            at(2, 3, "/", C.accent)
+            at(3, 3, shown, colours.white)
+            at(3 + #shown, 3, "_", C.dim)
         end
 
         local baseY = 3 + searchRow
         local hintText
         if searchable and search ~= "" then
-            hintText = "Type:Filter  Q:Clear  Enter:Select"
+            hintText = W < 40 and "Q:Clr Ent:Sel" or "Type:Filter  Q:Clear  Enter:Select"
         elseif searchable then
-            hintText = hints or "Type:Search  Enter:Select  Q:Back"
+            hintText = W < 40 and "Type:Srch Ent:Sel Q:Back" or (hints or "Type:Search  Enter:Select  Q:Back")
         else
-            hintText = hints or "Up/Down:Move  Enter:Select  Q:Back"
+            hintText = hints or (W < 40 and "Ent:Sel Q:Back" or "Up/Down:Move  Enter:Select  Q:Back")
         end
         footer(hintText)
 
@@ -279,12 +292,14 @@ local function multiPick(title, allItems, selected)
         clear()
         bar(1, " " .. title)
 
-        at(2, 3, "Search: ", C.accent)
-        at(10, 3, search, colours.white)
-        at(10 + #search, 3, "_", C.dim)
+        local maxSearch = W - 6
+        local shown = #search > maxSearch and search:sub(-maxSearch) or search
+        at(2, 3, "/", C.accent)
+        at(3, 3, shown, colours.white)
+        at(3 + #shown, 3, "_", C.dim)
 
-        at(2, H - 1, "(" .. countSelected() .. " selected)", C.accent)
-        footer("Enter:Toggle  Tab:Done  Q:Cancel")
+        at(2, H - 1, countSelected() .. " selected", C.accent)
+        footer(W < 40 and "Ent:Tog Tab:Done Q:Back" or "Enter:Toggle  Tab:Done  Q:Cancel")
 
         local baseY = 4
 
@@ -305,23 +320,25 @@ local function multiPick(title, allItems, selected)
                 local name = type(it) == "table" and it.name or nil
                 local isSel = name and selected[name]
 
-                local check = isSel and "[*]" or "[ ]"
-                local checkCol = isSel and C.ok or C.dim
+                local mark = isSel and "*" or " "
+                local markCol = isSel and C.ok or C.dim
+                -- Layout: "> * Label   Right" — adapts to width
+                local pad = 6  -- "> * " = 4 chars + right margin
 
                 if vidx == sel then
                     at(1, y, string.rep(" ", W), nil, colours.grey)
-                    at(2, y, "> ", C.sel, colours.grey)
-                    at(4, y, check, checkCol, colours.grey)
-                    at(8, y, trunc(label, W - 12), C.sel, colours.grey)
-                    if right then
+                    at(2, y, ">", C.sel, colours.grey)
+                    at(3, y, mark, markCol, colours.grey)
+                    at(5, y, trunc(label, W - pad), C.sel, colours.grey)
+                    if right and W > 30 then
                         local rc = (type(it) == "table" and it.rcol) or C.dim
                         if rc == colours.grey then rc = colours.white end
                         at(W - #right, y, right, rc, colours.grey)
                     end
                 else
-                    at(4, y, check, checkCol)
-                    at(8, y, trunc(label, W - 12), colours.white)
-                    if right then
+                    at(3, y, mark, markCol)
+                    at(5, y, trunc(label, W - pad), colours.white)
+                    if right and W > 30 then
                         at(W - #right, y, right, (type(it) == "table" and it.rcol) or C.dim)
                     end
                 end
