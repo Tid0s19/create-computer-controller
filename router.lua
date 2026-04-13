@@ -1,71 +1,38 @@
--- router.lua — Background routing engine
--- Periodically processes enabled routes, sending matching items to destinations
+-- router.lua — Background loop that processes rules
 
-local config = require("config")
 local network = require("network")
 
 local router = {}
-
 local running = false
-local status = { routes = {} }
-
-function router.getStatus()
-    return status
-end
 
 function router.stop()
     running = false
 end
 
---- Run the routing loop. This blocks — run it inside parallel.waitForAny.
--- @param data table — config data (routes table, shared with UI)
 function router.run(data)
     running = true
 
-    -- Track per-route timers
-    local timers = {}
+    local lastRun = {}  -- per-destination cooldown
 
     while running do
-        status.routes = {}
+        for i, dest in ipairs(data.destinations) do
+            local now = os.clock()
+            if not lastRun[i] or now - lastRun[i] >= 10 then
+                lastRun[i] = now
 
-        for i, route in ipairs(data.routes) do
-            local rs = {
-                name = route.name,
-                address = route.address,
-                enabled = route.enabled,
-                lastResult = nil,
-                lastError = nil,
-            }
-
-            if route.enabled then
-                -- Check if enough time has elapsed since last run
-                local now = os.clock()
-                local lastRun = timers[i] or 0
-                local interval = route.interval or 10
-
-                if now - lastRun >= interval then
-                    local count, err = network.executeRoute(route)
-                    timers[i] = now
-
-                    if count >= 0 then
-                        rs.lastResult = count .. " items sent"
-                    else
-                        rs.lastResult = "error"
-                        rs.lastError = err
+                for _, rule in ipairs(dest.rules) do
+                    if rule.enabled then
+                        if rule.type == "item" then
+                            network.sendItem(dest.address, rule.item, rule.count)
+                        elseif rule.type == "tag" then
+                            network.sendByTag(dest.address, rule.tag)
+                        end
                     end
-                else
-                    local remaining = math.ceil(interval - (now - lastRun))
-                    rs.lastResult = "next in " .. remaining .. "s"
                 end
             end
-
-            table.insert(status.routes, rs)
         end
 
-        -- Reload config in case UI changed it
-        -- (data table is shared by reference, so changes from UI are live)
-
-        os.sleep(1)  -- tick every second to keep timers responsive
+        os.sleep(1)
     end
 end
 

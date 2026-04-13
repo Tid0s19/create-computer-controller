@@ -1,604 +1,401 @@
--- ui.lua — Terminal UI for Create Controller
--- Provides a multi-page interface for managing routing rules
+-- ui.lua — Simple terminal UI for Create Controller
 
 local config = require("config")
 local network = require("network")
 
 local ui = {}
+local W, H
 
--- Colour shortcuts (fall back to white/black on monochrome)
-local col = {
-    bg      = colours.black,
-    fg      = colours.white,
-    header  = colours.yellow,
+-- Colours
+local C = {
+    title   = colours.yellow,
     accent  = colours.cyan,
-    success = colours.lime,
-    error   = colours.red,
+    ok      = colours.lime,
+    err     = colours.red,
     dim     = colours.grey,
-    selected = colours.lightBlue,
-    enabled = colours.lime,
-    disabled = colours.red,
+    sel     = colours.lightBlue,
+    on      = colours.lime,
+    off     = colours.red,
 }
 
-local W, H = term.getSize()
-
 ----------------------------------------------------------------------
--- Drawing helpers
+-- Drawing
 ----------------------------------------------------------------------
 
 local function clear()
-    term.setBackgroundColour(col.bg)
-    term.setTextColour(col.fg)
+    term.setBackgroundColour(colours.black)
+    term.setTextColour(colours.white)
     term.clear()
 end
 
-local function writeAt(x, y, text, fg, bg)
+local function at(x, y, text, fg, bg)
     term.setCursorPos(x, y)
     if fg then term.setTextColour(fg) end
     if bg then term.setBackgroundColour(bg) end
     term.write(text)
+    if bg then term.setBackgroundColour(colours.black) end
 end
 
-local function hline(y, char)
-    writeAt(1, y, string.rep(char or "\x8c", W), col.dim)
+local function bar(y, text, fg)
+    at(1, y, string.rep(" ", W), nil, colours.grey)
+    at(2, y, text, fg or C.title, colours.grey)
 end
 
-local function drawHeader(title)
-    writeAt(1, 1, string.rep(" ", W), col.header, colours.grey)
-    local t = " Create Controller "
-    writeAt(math.floor((W - #t) / 2) + 1, 1, t, col.header, colours.grey)
-    writeAt(1, 2, string.rep(" ", W), col.fg, col.bg)
-    if title then
-        writeAt(2, 2, title, col.accent, col.bg)
-    end
-    hline(3)
-    term.setBackgroundColour(col.bg)
+local function footer(text)
+    at(1, H, string.rep(" ", W), C.dim, colours.black)
+    at(2, H, text, C.dim)
 end
 
-local function drawFooter(hints)
-    hline(H - 1)
-    writeAt(1, H, string.rep(" ", W), col.dim, col.bg)
-    writeAt(2, H, hints or "", col.dim, col.bg)
+local function trunc(s, n)
+    return #s > n and s:sub(1, n - 2) .. ".." or s
 end
 
-local function truncate(str, maxLen)
-    if #str > maxLen then
-        return str:sub(1, maxLen - 2) .. ".."
-    end
-    return str
-end
-
-local function centerText(y, text, fg)
-    local x = math.floor((W - #text) / 2) + 1
-    writeAt(x, y, text, fg or col.fg)
-end
-
-----------------------------------------------------------------------
--- Input helpers
-----------------------------------------------------------------------
-
-local function readInput(prompt, y, prefill)
-    writeAt(2, y, prompt, col.accent)
+local function input(prompt, y, prefill)
+    at(2, y, prompt, C.accent)
     term.setCursorPos(2 + #prompt, y)
-    term.setTextColour(col.fg)
+    term.setTextColour(colours.white)
     term.setCursorBlink(true)
-    -- CC read() with optional replace char and history; prefill via write
-    if prefill then
-        term.write(prefill)
-    end
-    local input = read(nil, nil, nil, prefill)
+    local r = read(nil, nil, nil, prefill)
     term.setCursorBlink(false)
-    return input
-end
-
-local function confirm(msg, y)
-    writeAt(2, y, msg .. " (y/n) ", col.accent)
-    while true do
-        local _, key = os.pullEvent("key")
-        if key == keys.y then return true end
-        if key == keys.n or key == keys.q then return false end
-    end
+    return r
 end
 
 ----------------------------------------------------------------------
--- Generic scrollable list selector
+-- Generic list picker — returns index or nil
 ----------------------------------------------------------------------
 
-local function listSelect(title, items, opts)
-    opts = opts or {}
-    local selected = opts.selected or 1
-    local scroll = 0
-    local listH = H - 5  -- rows available for list items
-    local footerHints = opts.footer or "[Up/Down] Navigate  [Enter] Select  [Q] Back"
+local function pick(title, items, hints, onKey)
+    local sel, scroll = 1, 0
+    local rows = H - 4
 
     while true do
+        W, H = term.getSize()
+        rows = H - 4
         clear()
-        drawHeader(title)
-        drawFooter(footerHints)
+        bar(1, " " .. title)
+        footer(hints or "Up/Down:Move  Enter:Select  Q:Back")
 
         if #items == 0 then
-            centerText(math.floor(H / 2), opts.emptyMsg or "No items", col.dim)
+            at(2, math.floor(H / 2), "Nothing here yet", C.dim)
         else
-            -- Adjust scroll so selected is visible
-            if selected - scroll > listH then
-                scroll = selected - listH
-            end
-            if selected - scroll < 1 then
-                scroll = selected - 1
-            end
+            if sel - scroll > rows then scroll = sel - rows end
+            if sel - scroll < 1 then scroll = sel - 1 end
 
-            for i = 1, listH do
+            for i = 1, rows do
                 local idx = i + scroll
                 if idx > #items then break end
-                local item = items[idx]
-                local y = i + 3
-                local label = type(item) == "table" and item.label or tostring(item)
-                label = truncate(label, W - 4)
+                local it = items[idx]
+                local y = i + 2
+                local label = type(it) == "table" and it.label or tostring(it)
+                local right = type(it) == "table" and it.right or nil
 
-                if idx == selected then
-                    writeAt(1, y, " " .. string.rep(" ", W - 1), col.fg, colours.grey)
-                    writeAt(2, y, "> ", col.selected, colours.grey)
-                    writeAt(4, y, label, col.fg, colours.grey)
-                    if type(item) == "table" and item.right then
-                        local r = item.right
-                        writeAt(W - #r, y, r, item.rightCol or col.dim, colours.grey)
+                if idx == sel then
+                    at(1, y, string.rep(" ", W), nil, colours.grey)
+                    at(2, y, "> " .. trunc(label, W - 6), C.sel, colours.grey)
+                    if right then
+                        at(W - #right, y, right, (type(it) == "table" and it.rcol) or C.dim, colours.grey)
                     end
                 else
-                    writeAt(2, y, "  ", col.dim)
-                    writeAt(4, y, label, col.fg)
-                    if type(item) == "table" and item.right then
-                        local r = item.right
-                        writeAt(W - #r, y, r, item.rightCol or col.dim)
+                    at(4, y, trunc(label, W - 6), colours.white)
+                    if right then
+                        at(W - #right, y, right, (type(it) == "table" and it.rcol) or C.dim)
                     end
                 end
             end
-
-            -- Scroll indicator
-            if #items > listH then
-                local pct = math.floor((selected / #items) * 100)
-                writeAt(W - 4, 3, string.format("%3d%%", pct), col.dim)
-            end
         end
 
-        local event, key = os.pullEvent("key")
+        local _, key = os.pullEvent("key")
         if key == keys.up then
-            selected = selected > 1 and selected - 1 or #items
+            sel = sel > 1 and sel - 1 or #items
         elseif key == keys.down then
-            selected = selected < #items and selected + 1 or 1
-        elseif key == keys.pageUp then
-            selected = math.max(1, selected - listH)
-        elseif key == keys.pageDown then
-            selected = math.min(#items, selected + listH)
-        elseif key == keys.home then
-            selected = 1
-        elseif key == keys["end"] then
-            selected = #items
-        elseif key == keys.enter then
-            if #items > 0 then
-                return selected, items[selected]
-            end
+            sel = sel < #items and sel + 1 or 1
+        elseif key == keys.enter and #items > 0 then
+            return sel
         elseif key == keys.q then
             return nil
-        elseif opts.onKey then
-            local result = opts.onKey(key, selected, items)
-            if result == "refresh" then
-                -- items may have changed, clamp selection
-                selected = math.min(selected, math.max(1, #items))
-            elseif result == "back" then
-                return nil
-            end
+        elseif onKey then
+            onKey(key, sel)
         end
     end
 end
 
 ----------------------------------------------------------------------
--- Page: Route List (main menu)
+-- Browse network: pick an item
 ----------------------------------------------------------------------
 
-local data  -- config data, loaded at start
+local function browseItems()
+    clear()
+    bar(1, " Scanning network...")
+    at(2, 3, "Please wait...", C.dim)
 
-local function routeListItems()
-    local items = {}
-    for i, route in ipairs(data.routes) do
-        local status = route.enabled and "ON" or "OFF"
-        local statusCol = route.enabled and col.enabled or col.disabled
-        table.insert(items, {
-            label = route.name .. " -> " .. route.address,
-            right = status,
-            rightCol = statusCol,
-            route = route,
-            index = i,
+    local items = network.getAllItems()
+    if #items == 0 then
+        at(2, 5, "No items found on network", C.err)
+        os.sleep(1.5)
+        return nil
+    end
+
+    local list = {}
+    for _, it in ipairs(items) do
+        table.insert(list, {
+            label = it.displayName,
+            right = tostring(it.count),
+            rcol = C.dim,
+            name = it.name,
         })
     end
-    return items
+
+    local idx = pick("Pick item from network", list, "Enter:Select  Q:Cancel")
+    if idx then return list[idx].name, list[idx].label end
+    return nil
 end
 
 ----------------------------------------------------------------------
--- Page: Filter/Exclusion editor (shared)
+-- Browse network: pick a tag
 ----------------------------------------------------------------------
 
-local function editFilterList(route, category, filterType, label)
-    -- category = "filters" or "exclusions"
-    -- filterType = "items", "tags", or "globs"
-    local function getItems()
-        local list = route[category][filterType]
-        local items = {}
-        for i, v in ipairs(list) do
-            table.insert(items, { label = v, index = i })
-        end
-        return items
+local function browseTags()
+    clear()
+    bar(1, " Scanning network...")
+    at(2, 3, "Please wait...", C.dim)
+
+    local tags = network.getAllTags()
+    if #tags == 0 then
+        at(2, 5, "No tags found on network", C.err)
+        os.sleep(1.5)
+        return nil
     end
 
-    local footer = "[Enter] Remove  [A] Add  [B] Browse network  [Q] Back"
-
-    listSelect(label, getItems(), {
-        emptyMsg = "No " .. filterType .. " defined. Press [A] to add.",
-        footer = footer,
-        onKey = function(key, sel, items)
-            if key == keys.a then
-                -- Add new entry
-                clear()
-                drawHeader("Add " .. filterType:sub(1, -2))
-                local value = readInput("Value: ", 5)
-                if value and value ~= "" then
-                    if category == "filters" then
-                        config.addFilter(route, filterType, value)
-                    else
-                        config.addExclusion(route, filterType, value)
-                    end
-                    config.save(data)
-                end
-                -- Rebuild list
-                local newItems = getItems()
-                for k in pairs(items) do items[k] = nil end
-                for k, v in ipairs(newItems) do items[k] = v end
-                return "refresh"
-
-            elseif key == keys.b then
-                -- Browse network items/tags
-                clear()
-                drawHeader("Scanning network...")
-                centerText(math.floor(H / 2), "Please wait...", col.dim)
-
-                local browseItems = {}
-                if filterType == "tags" then
-                    local tags = network.getAllTags()
-                    for _, t in ipairs(tags) do
-                        table.insert(browseItems, t)
-                    end
-                else
-                    local names = network.getAllItems()
-                    for _, n in ipairs(names) do
-                        table.insert(browseItems, n)
-                    end
-                end
-
-                if #browseItems == 0 then
-                    clear()
-                    drawHeader("Browse")
-                    centerText(math.floor(H / 2), "Nothing found on network", col.error)
-                    os.sleep(1.5)
-                else
-                    local _, picked = listSelect(
-                        "Select " .. filterType:sub(1, -2) .. " from network",
-                        browseItems,
-                        { footer = "[Enter] Add  [Q] Cancel" }
-                    )
-                    if picked then
-                        local val = type(picked) == "table" and picked.label or picked
-                        if category == "filters" then
-                            config.addFilter(route, filterType, val)
-                        else
-                            config.addExclusion(route, filterType, val)
-                        end
-                        config.save(data)
-                    end
-                end
-
-                local newItems = getItems()
-                for k in pairs(items) do items[k] = nil end
-                for k, v in ipairs(newItems) do items[k] = v end
-                return "refresh"
-
-            elseif key == keys.enter or key == keys.delete or key == keys.x then
-                -- Remove selected
-                if sel and items[sel] then
-                    if category == "filters" then
-                        config.removeFilter(route, filterType, items[sel].index)
-                    else
-                        config.removeExclusion(route, filterType, items[sel].index)
-                    end
-                    config.save(data)
-                    local newItems = getItems()
-                    for k in pairs(items) do items[k] = nil end
-                    for k, v in ipairs(newItems) do items[k] = v end
-                    return "refresh"
-                end
-            end
-        end,
-    })
+    local idx = pick("Pick tag from network", tags, "Enter:Select  Q:Cancel")
+    if idx then return tags[idx] end
+    return nil
 end
 
 ----------------------------------------------------------------------
--- Page: Route editor
+-- Edit a destination's rules
 ----------------------------------------------------------------------
 
-local function editRoute(route)
-    while true do
-        local statusStr = route.enabled and "Enabled" or "Disabled"
-        local statusCol = route.enabled and col.enabled or col.disabled
-        local items = {
-            { label = "Name: " .. route.name, action = "name" },
-            { label = "Address: " .. route.address, action = "address" },
-            { label = "Status: " .. statusStr, right = "[Toggle]", rightCol = statusCol, action = "toggle" },
-            { label = "Interval: " .. route.interval .. "s", action = "interval" },
-            { label = "Stacks per item: " .. route.stackCount, action = "stacks" },
-            { label = "" },
-            { label = "--- Include Filters ---" },
-            { label = "  Items (" .. #route.filters.items .. ")", action = "filter_items" },
-            { label = "  Tags (" .. #route.filters.tags .. ")", action = "filter_tags" },
-            { label = "  Globs (" .. #route.filters.globs .. ")", action = "filter_globs" },
-            { label = "" },
-            { label = "--- Exclusions ---" },
-            { label = "  Items (" .. #route.exclusions.items .. ")", action = "excl_items" },
-            { label = "  Tags (" .. #route.exclusions.tags .. ")", action = "excl_tags" },
-            { label = "  Globs (" .. #route.exclusions.globs .. ")", action = "excl_globs" },
-            { label = "" },
-            { label = "[ Test Route ]", action = "test" },
-            { label = "[ Delete Route ]", action = "delete" },
-        }
+local function ruleLabel(rule)
+    if rule.type == "item" then
+        return "Keep " .. rule.count .. "x " .. (rule.displayName or rule.item)
+    elseif rule.type == "tag" then
+        return "Send all [" .. rule.tag .. "]"
+    end
+    return "???"
+end
 
-        local footer = "[Enter] Edit  [Q] Back"
-        local idx = listSelect("Edit Route: " .. route.name, items, { footer = footer })
+local function editDestination(dest, data)
+    while true do
+        local items = {}
+        for i, rule in ipairs(dest.rules) do
+            local status = rule.enabled and "ON" or "OFF"
+            local scol = rule.enabled and C.on or C.off
+            table.insert(items, { label = ruleLabel(rule), right = status, rcol = scol, idx = i })
+        end
+        table.insert(items, { label = "" })
+        table.insert(items, { label = "[+] Keep X of item...", action = "add_item" })
+        table.insert(items, { label = "[+] Send all with tag...", action = "add_tag" })
+        table.insert(items, { label = "[R] Rename", action = "rename" })
+        table.insert(items, { label = "[D] Delete destination", action = "delete" })
+
+        local idx = pick(dest.name .. " (" .. dest.address .. ")", items,
+            "Enter:Edit  E:Toggle  X:Remove  Q:Back",
+            function(key, sel)
+                if key == keys.e and items[sel] and items[sel].idx then
+                    local rule = dest.rules[items[sel].idx]
+                    rule.enabled = not rule.enabled
+                    config.save(data)
+                end
+            end)
 
         if not idx then return end
 
-        local action = items[idx].action
-        if action == "name" then
+        local it = items[idx]
+
+        if it.action == "add_item" then
+            -- Add "keep X of item" rule
             clear()
-            drawHeader("Rename Route")
-            local val = readInput("Name: ", 5, route.name)
-            if val and val ~= "" then
-                route.name = val
-                config.save(data)
+            bar(1, " Add item rule")
+            at(2, 3, "Browse network or type manually?", C.dim)
+            local list = { "Browse network items", "Type item ID manually" }
+            local choice = pick("Add item rule", list, "Enter:Select  Q:Cancel")
+
+            local itemName, displayName
+            if choice == 1 then
+                itemName, displayName = browseItems()
+            elseif choice == 2 then
+                clear()
+                bar(1, " Add item rule")
+                itemName = input("Item ID: ", 3)
+                displayName = itemName
             end
 
-        elseif action == "address" then
-            clear()
-            drawHeader("Set Address")
-            writeAt(2, 4, "Enter the frogport address (must match exactly)", col.dim)
-            local val = readInput("Address: ", 6, route.address)
-            if val and val ~= "" then
-                route.address = val
-                config.save(data)
-            end
-
-        elseif action == "toggle" then
-            route.enabled = not route.enabled
-            config.save(data)
-
-        elseif action == "interval" then
-            clear()
-            drawHeader("Set Interval")
-            local val = readInput("Seconds: ", 5, tostring(route.interval))
-            val = tonumber(val)
-            if val and val >= 1 then
-                route.interval = math.floor(val)
-                config.save(data)
-            end
-
-        elseif action == "stacks" then
-            clear()
-            drawHeader("Stacks Per Item")
-            local val = readInput("Stacks (1-64): ", 5, tostring(route.stackCount))
-            val = tonumber(val)
-            if val and val >= 1 and val <= 64 then
-                route.stackCount = math.floor(val)
-                config.save(data)
-            end
-
-        elseif action == "filter_items" then
-            editFilterList(route, "filters", "items", "Include Items")
-        elseif action == "filter_tags" then
-            editFilterList(route, "filters", "tags", "Include Tags")
-        elseif action == "filter_globs" then
-            editFilterList(route, "filters", "globs", "Include Globs")
-
-        elseif action == "excl_items" then
-            editFilterList(route, "exclusions", "items", "Exclude Items")
-        elseif action == "excl_tags" then
-            editFilterList(route, "exclusions", "tags", "Exclude Tags")
-        elseif action == "excl_globs" then
-            editFilterList(route, "exclusions", "globs", "Exclude Globs")
-
-        elseif action == "test" then
-            clear()
-            drawHeader("Testing Route: " .. route.name)
-            centerText(math.floor(H / 2) - 1, "Scanning network...", col.dim)
-
-            local stock = network.getStock(true)
-            local matching = 0
-            local excluded = 0
-            local matchList = {}
-
-            for _, item in ipairs(stock) do
-                if network.matchesFilters(item, route.filters) then
-                    if network.isExcluded(item, route.exclusions) then
-                        excluded = excluded + 1
-                    else
-                        matching = matching + 1
-                        if #matchList < 10 then
-                            table.insert(matchList, item.displayName or item.name)
-                        end
-                    end
+            if itemName and itemName ~= "" then
+                clear()
+                bar(1, " Add item rule")
+                at(2, 3, "Item: " .. (displayName or itemName), C.accent)
+                local countStr = input("How many to keep: ", 5)
+                local count = tonumber(countStr)
+                if count and count > 0 then
+                    table.insert(dest.rules, {
+                        type = "item",
+                        item = itemName,
+                        displayName = displayName,
+                        count = math.floor(count),
+                        enabled = true,
+                    })
+                    config.save(data)
                 end
             end
 
+        elseif it.action == "add_tag" then
+            -- Add "send all with tag" rule
             clear()
-            drawHeader("Test Results: " .. route.name)
-            writeAt(2, 4, "Address: " .. route.address, col.accent)
-            writeAt(2, 5, "Matching items: " .. matching, col.success)
-            writeAt(2, 6, "Excluded items: " .. excluded, col.error)
-            writeAt(2, 8, "Sample matches:", col.fg)
-            for i, name in ipairs(matchList) do
-                writeAt(4, 8 + i, truncate(name, W - 6), col.dim)
-            end
-            if matching > #matchList then
-                writeAt(4, 9 + #matchList, "... and " .. (matching - #matchList) .. " more", col.dim)
-            end
-            drawFooter("Press any key to continue")
-            os.pullEvent("key")
+            bar(1, " Add tag rule")
+            local list = { "Browse network tags", "Type tag manually" }
+            local choice = pick("Add tag rule", list, "Enter:Select  Q:Cancel")
 
-        elseif action == "delete" then
+            local tag
+            if choice == 1 then
+                tag = browseTags()
+            elseif choice == 2 then
+                clear()
+                bar(1, " Add tag rule")
+                tag = input("Tag: ", 3)
+            end
+
+            if tag and tag ~= "" then
+                table.insert(dest.rules, {
+                    type = "tag",
+                    tag = tag,
+                    enabled = true,
+                })
+                config.save(data)
+            end
+
+        elseif it.action == "rename" then
             clear()
-            drawHeader("Delete Route")
-            if confirm("Delete '" .. route.name .. "'?", 5) then
-                for i, r in ipairs(data.routes) do
-                    if r == route then
-                        table.remove(data.routes, i)
+            bar(1, " Rename")
+            local name = input("New name: ", 3, dest.name)
+            if name and name ~= "" then
+                dest.name = name
+                config.save(data)
+            end
+
+        elseif it.action == "delete" then
+            clear()
+            bar(1, " Delete destination")
+            at(2, 3, "Delete '" .. dest.name .. "'? (y/n)", C.err)
+            local _, key = os.pullEvent("key")
+            if key == keys.y then
+                for i, d in ipairs(data.destinations) do
+                    if d == dest then
+                        table.remove(data.destinations, i)
                         break
                     end
                 end
                 config.save(data)
                 return
             end
-        end
-    end
-end
 
-----------------------------------------------------------------------
--- Page: Status dashboard
-----------------------------------------------------------------------
-
-local routerStatus = {}  -- shared state updated by router
-
-function ui.setRouterStatus(status)
-    routerStatus = status
-end
-
-local function showStatus()
-    clear()
-    drawHeader("Router Status")
-    drawFooter("Press any key to go back")
-
-    if not routerStatus or not routerStatus.routes then
-        centerText(math.floor(H / 2), "Router not running", col.dim)
-        os.pullEvent("key")
-        return
-    end
-
-    local y = 4
-    for _, rs in ipairs(routerStatus.routes) do
-        if y > H - 3 then break end
-        local statusStr
-        if not rs.enabled then
-            statusStr = "DISABLED"
-            writeAt(2, y, truncate(rs.name, W - 20), col.dim)
-            writeAt(W - #statusStr - 1, y, statusStr, col.dim)
-        else
-            statusStr = rs.lastResult or "pending"
-            local c = rs.lastError and col.error or col.success
-            writeAt(2, y, truncate(rs.name, W - 20), col.fg)
-            writeAt(W - #statusStr - 1, y, statusStr, c)
-        end
-        y = y + 1
-    end
-
-    os.pullEvent("key")
-end
-
-----------------------------------------------------------------------
--- Main menu
-----------------------------------------------------------------------
-
-function ui.run(configData)
-    data = configData
-
-    while true do
-        W, H = term.getSize()
-        local items = routeListItems()
-
-        -- Add action items at the bottom
-        table.insert(items, { label = "" })
-        table.insert(items, { label = "[+] New Route", action = "new" })
-        table.insert(items, { label = "[S] Router Status", action = "status" })
-
-        local footer = "[Enter] Edit  [N] New  [S] Status  [E] Toggle  [Q] Quit"
-        local idx, item = listSelect("Routes", items, {
-            footer = footer,
-            onKey = function(key, sel, items)
-                if key == keys.n then
-                    -- Quick-add new route
-                    clear()
-                    drawHeader("New Route")
-                    local name = readInput("Route name: ", 5)
-                    if name and name ~= "" then
-                        clear()
-                        drawHeader("New Route")
-                        writeAt(2, 4, "Must match the frogport's address exactly", col.dim)
-                        local addr = readInput("Frogport address: ", 6)
-                        if addr and addr ~= "" then
-                            local route = config.newRoute(name, addr)
-                            table.insert(data.routes, route)
-                            config.save(data)
-                            -- Rebuild list
-                            local newItems = routeListItems()
-                            table.insert(newItems, { label = "" })
-                            table.insert(newItems, { label = "[+] New Route", action = "new" })
-                            table.insert(newItems, { label = "[S] Router Status", action = "status" })
-                            for k in pairs(items) do items[k] = nil end
-                            for k, v in ipairs(newItems) do items[k] = v end
-                        end
-                    end
-                    return "refresh"
-
-                elseif key == keys.e then
-                    -- Toggle enabled on selected route
-                    if sel and items[sel] and items[sel].route then
-                        items[sel].route.enabled = not items[sel].route.enabled
-                        config.save(data)
-                        local newItems = routeListItems()
-                        table.insert(newItems, { label = "" })
-                        table.insert(newItems, { label = "[+] New Route", action = "new" })
-                        table.insert(newItems, { label = "[S] Router Status", action = "status" })
-                        for k in pairs(items) do items[k] = nil end
-                        for k, v in ipairs(newItems) do items[k] = v end
-                        return "refresh"
-                    end
-
-                elseif key == keys.s then
-                    showStatus()
-                    return "refresh"
-                end
-            end,
-        })
-
-        if not idx then
-            -- Q pressed — confirm quit
-            clear()
-            drawHeader("Quit")
-            if confirm("Stop controller and exit?", 5) then
-                return
+        elseif it.idx then
+            -- Edit existing rule
+            local rule = dest.rules[it.idx]
+            local actions = { "Toggle on/off", "Remove rule" }
+            if rule.type == "item" then
+                table.insert(actions, 1, "Change amount")
             end
-        elseif item and item.action == "new" then
-            clear()
-            drawHeader("New Route")
-            local name = readInput("Route name: ", 5)
-            if name and name ~= "" then
-                clear()
-                drawHeader("New Route")
-                writeAt(2, 4, "Must match the frogport's address exactly", col.dim)
-                local addr = readInput("Frogport address: ", 6)
-                if addr and addr ~= "" then
-                    local route = config.newRoute(name, addr)
-                    table.insert(data.routes, route)
+            local choice = pick("Edit: " .. ruleLabel(rule), actions, "Enter:Select  Q:Cancel")
+            if choice then
+                local action = actions[choice]
+                if action == "Change amount" then
+                    clear()
+                    bar(1, " Change amount")
+                    local val = input("New amount: ", 3, tostring(rule.count))
+                    val = tonumber(val)
+                    if val and val > 0 then
+                        rule.count = math.floor(val)
+                        config.save(data)
+                    end
+                elseif action == "Toggle on/off" then
+                    rule.enabled = not rule.enabled
+                    config.save(data)
+                elseif action == "Remove rule" then
+                    table.remove(dest.rules, it.idx)
                     config.save(data)
                 end
             end
-        elseif item and item.action == "status" then
-            showStatus()
-        elseif item and item.route then
-            editRoute(item.route)
+        end
+    end
+end
+
+----------------------------------------------------------------------
+-- Main screen
+----------------------------------------------------------------------
+
+function ui.run(data)
+    while true do
+        W, H = term.getSize()
+        local items = {}
+        for _, dest in ipairs(data.destinations) do
+            local active = 0
+            for _, r in ipairs(dest.rules) do
+                if r.enabled then active = active + 1 end
+            end
+            local right = active .. " rule" .. (active ~= 1 and "s" or "")
+            table.insert(items, { label = dest.name .. " -> " .. dest.address, right = right, rcol = C.dim, dest = dest })
+        end
+        table.insert(items, { label = "" })
+        table.insert(items, { label = "[+] Add destination", action = "add" })
+
+        local idx = pick("Create Controller", items, "Enter:Edit  N:New  Q:Quit",
+            function(key, sel)
+                if key == keys.n then
+                    -- shortcut to add
+                    clear()
+                    bar(1, " New destination")
+                    local name = input("Name (e.g. Crusher): ", 3)
+                    if name and name ~= "" then
+                        clear()
+                        bar(1, " New destination")
+                        local addr = input("Frogport address: ", 3)
+                        if addr and addr ~= "" then
+                            table.insert(data.destinations, {
+                                name = name,
+                                address = addr,
+                                rules = {},
+                            })
+                            config.save(data)
+                        end
+                    end
+                end
+            end)
+
+        if not idx then
+            clear()
+            bar(1, " Quit")
+            at(2, 3, "Stop controller and exit? (y/n)", C.accent)
+            local _, key = os.pullEvent("key")
+            if key == keys.y then return end
+        elseif items[idx].action == "add" then
+            clear()
+            bar(1, " New destination")
+            local name = input("Name (e.g. Crusher): ", 3)
+            if name and name ~= "" then
+                clear()
+                bar(1, " New destination")
+                local addr = input("Frogport address: ", 3)
+                if addr and addr ~= "" then
+                    table.insert(data.destinations, {
+                        name = name,
+                        address = addr,
+                        rules = {},
+                    })
+                    config.save(data)
+                end
+            end
+        elseif items[idx].dest then
+            editDestination(items[idx].dest, data)
         end
     end
 end
