@@ -36,7 +36,16 @@ function router.run(data)
                     elseif rule.type == "tag" then
                         if sensor.freeSlots > 0 then
                             local budget = sensor.freeSlots * 64
-                            network.requestTagged(dest.address, rule.tag, budget)
+                            local tagged = network.getTaggedStock(rule.tag)
+                            for _, item in ipairs(tagged) do
+                                if budget <= 0 then break end
+                                local atDest = network.getItemCountAt(dest.address, item.name)
+                                local toRequest = math.min(item.count - atDest, budget)
+                                if toRequest > 0 then
+                                    network.requestItems(dest.address, item.name, toRequest)
+                                    budget = budget - toRequest
+                                end
+                            end
                         end
                     end
 

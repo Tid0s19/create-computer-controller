@@ -89,15 +89,19 @@ function network.requestItems(address, itemName, count)
     return 0
 end
 
--- Request tagged items via Stock Ticker
-function network.requestTagged(address, tag, count)
-    if not ticker then return 0 end
-    local ok, result = pcall(ticker.requestFiltered, address, {
-        tags = { [tag] = true },
-        _requestCount = count,
-    })
-    if ok then return result or 0 end
-    return 0
+-- Get items in the network matching a tag
+function network.getTaggedStock(tag)
+    local stock = network.getStock()
+    local result = {}
+    for _, item in ipairs(stock) do
+        if item.tags and item.tags[tag] then
+            table.insert(result, {
+                name = item.name,
+                count = item.count,
+            })
+        end
+    end
+    return result
 end
 
 -- Stock Ticker methods (for tag/item browsing)
