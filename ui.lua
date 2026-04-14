@@ -5,6 +5,7 @@ local network = require("network")
 
 local ui = {}
 local W, H
+local VERSION = "1.1.0"
 
 local C = {
     title   = colours.yellow,
@@ -1078,7 +1079,9 @@ function ui.run(data)
         W, H = term.getSize()
         local items = buildMainList(data)
 
-        local idx = pick("Configure Storage", items, "Enter:Edit  N:New  G:Groups  Q:Quit",
+        local mainHints = W < 40 and "N:New G:Grps Q:Quit v" .. VERSION
+            or "Enter:Edit  N:New  G:Groups  Q:Quit  v" .. VERSION
+        local idx = pick("Configure Storage", items, mainHints,
             function(key, sel)
                 if key == keys.n then
                     clear()
