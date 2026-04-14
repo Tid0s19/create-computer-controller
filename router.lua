@@ -18,6 +18,33 @@ function router.run(data)
     local lastRun = {}
     local lastConsolidate = {}
 
+    -- Delivery tracker: prevents re-requesting items that didn't actually arrive
+    -- Key: "destIdx:itemName" -> { time=when requested, count=count at time of request }
+    local deliveryTracker = {}
+    local DELIVERY_COOLDOWN = 30
+
+    -- Check if we should skip a request (item was recently requested but didn't deliver)
+    local function shouldThrottle(key, currentCount, now)
+        local entry = deliveryTracker[key]
+        if not entry then return false end
+        if now - entry.time >= DELIVERY_COOLDOWN then
+            -- Cooldown expired, allow retry
+            deliveryTracker[key] = nil
+            return false
+        end
+        if currentCount > entry.count then
+            -- Count increased — delivery succeeded, allow new requests
+            deliveryTracker[key] = nil
+            return false
+        end
+        -- Still on cooldown, no delivery detected
+        return true
+    end
+
+    local function trackRequest(key, currentCount, now)
+        deliveryTracker[key] = { time = now, count = currentCount }
+    end
+
     while running do
         for i, dest in ipairs(data.destinations) do
             local now = os.clock()
@@ -37,7 +64,11 @@ function router.run(data)
                         local have = network.getGroupItemCount(dest.addresses, rule.item)
                         local shortfall = rule.count - have
                         if shortfall > 0 then
-                            network.requestItems(targetAddr, rule.item, shortfall)
+                            local key = i .. ":item:" .. rule.item
+                            if not shouldThrottle(key, have, now) then
+                                network.requestItems(targetAddr, rule.item, shortfall)
+                                trackRequest(key, have, now)
+                            end
                         end
 
                     elseif rule.type == "tag" then
@@ -46,10 +77,15 @@ function router.run(data)
                             local tagged = network.getTaggedStockElsewhere(dest.addresses, rule.tag)
                             for _, item in ipairs(tagged) do
                                 if budget <= 0 then break end
+                                local atDest = network.getGroupItemCount(dest.addresses, item.name)
                                 local toRequest = math.min(item.count, budget)
                                 if toRequest > 0 then
-                                    network.requestItems(targetAddr, item.name, toRequest)
-                                    budget = budget - toRequest
+                                    local key = i .. ":tag:" .. item.name
+                                    if not shouldThrottle(key, atDest, now) then
+                                        network.requestItems(targetAddr, item.name, toRequest)
+                                        trackRequest(key, atDest, now)
+                                        budget = budget - toRequest
+                                    end
                                 end
                             end
                         end
@@ -68,10 +104,15 @@ function router.run(data)
                             for _, groupItem in ipairs(group.items) do
                                 if budget <= 0 then break end
                                 local available = elsewhereMap[groupItem.name] or 0
+                                local atDest = network.getGroupItemCount(dest.addresses, groupItem.name)
                                 local toRequest = math.min(available, budget)
                                 if toRequest > 0 then
-                                    network.requestItems(targetAddr, groupItem.name, toRequest)
-                                    budget = budget - toRequest
+                                    local key = i .. ":grp:" .. groupItem.name
+                                    if not shouldThrottle(key, atDest, now) then
+                                        network.requestItems(targetAddr, groupItem.name, toRequest)
+                                        trackRequest(key, atDest, now)
+                                        budget = budget - toRequest
+                                    end
                                 end
                             end
                         end
