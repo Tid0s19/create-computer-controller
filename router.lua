@@ -43,11 +43,10 @@ function router.run(data)
                     elseif rule.type == "tag" then
                         if sensor.freeSlots > 0 then
                             local budget = sensor.freeSlots * 64
-                            local tagged = network.getAdjustedTaggedStock(rule.tag)
+                            local tagged = network.getTaggedStockElsewhere(dest.addresses, rule.tag)
                             for _, item in ipairs(tagged) do
                                 if budget <= 0 then break end
-                                local atDest = network.getGroupItemCount(dest.addresses, item.name)
-                                local toRequest = math.min(item.count - atDest, budget)
+                                local toRequest = math.min(item.count, budget)
                                 if toRequest > 0 then
                                     network.requestItems(targetAddr, item.name, toRequest)
                                     budget = budget - toRequest
@@ -65,12 +64,11 @@ function router.run(data)
                         end
                         if group and sensor.freeSlots > 0 then
                             local budget = sensor.freeSlots * 64
-                            local stockMap = network.getAdjustedStockMap()
+                            local elsewhereMap = network.getStockMapElsewhere(dest.addresses)
                             for _, groupItem in ipairs(group.items) do
                                 if budget <= 0 then break end
-                                local inStock = stockMap[groupItem.name] or 0
-                                local atDest = network.getGroupItemCount(dest.addresses, groupItem.name)
-                                local toRequest = math.min(inStock - atDest, budget)
+                                local available = elsewhereMap[groupItem.name] or 0
+                                local toRequest = math.min(available, budget)
                                 if toRequest > 0 then
                                     network.requestItems(targetAddr, groupItem.name, toRequest)
                                     budget = budget - toRequest

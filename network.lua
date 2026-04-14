@@ -265,6 +265,62 @@ function network.getGroupItemCount(addresses, itemName)
     return total
 end
 
+-- How many of an item exist at sensors OTHER than the given addresses
+-- Uses sensor data only (avoids Stock Ticker timing issues)
+function network.getStockElsewhere(excludeAddresses, itemName)
+    local excludeSet = {}
+    for _, addr in ipairs(excludeAddresses) do
+        excludeSet[addr] = true
+    end
+    local total = 0
+    local now = os.clock()
+    for addr, data in pairs(sensors) do
+        if not excludeSet[addr] and now - data.lastSeen < 30 then
+            if data.portType ~= "factory" and data.items[itemName] then
+                total = total + data.items[itemName]
+            end
+        end
+    end
+    return total
+end
+
+-- Map of all items at sensors OTHER than the given addresses (excludes factory)
+function network.getStockMapElsewhere(excludeAddresses)
+    local excludeSet = {}
+    for _, addr in ipairs(excludeAddresses) do
+        excludeSet[addr] = true
+    end
+    local map = {}
+    local now = os.clock()
+    for addr, data in pairs(sensors) do
+        if not excludeSet[addr] and now - data.lastSeen < 30 and data.portType ~= "factory" then
+            for name, count in pairs(data.items) do
+                map[name] = (map[name] or 0) + count
+            end
+        end
+    end
+    return map
+end
+
+-- Tagged items at sensors OTHER than the given addresses (excludes factory)
+function network.getTaggedStockElsewhere(excludeAddresses, tag)
+    local stock = network.getStock()
+    local elsewhereMap = network.getStockMapElsewhere(excludeAddresses)
+    local result = {}
+    for _, item in ipairs(stock) do
+        if item.tags and item.tags[tag] then
+            local available = elsewhereMap[item.name] or 0
+            if available > 0 then
+                table.insert(result, {
+                    name = item.name,
+                    count = available,
+                })
+            end
+        end
+    end
+    return result
+end
+
 -- Address with the most free slots (for routing requests)
 function network.getBestAddress(addresses)
     local best = addresses[1]

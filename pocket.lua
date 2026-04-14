@@ -193,6 +193,56 @@ function networkProxy.getGroupItemCount(addresses, itemName)
     return total
 end
 
+function networkProxy.getStockElsewhere(excludeAddresses, itemName)
+    refreshSensors()
+    local excludeSet = {}
+    for _, addr in ipairs(excludeAddresses) do
+        excludeSet[addr] = true
+    end
+    local total = 0
+    for addr, data in pairs(sensorCache) do
+        if not excludeSet[addr] and (data.portType or "storage") ~= "factory" then
+            if data.items and data.items[itemName] then
+                total = total + data.items[itemName]
+            end
+        end
+    end
+    return total
+end
+
+function networkProxy.getStockMapElsewhere(excludeAddresses)
+    refreshSensors()
+    local excludeSet = {}
+    for _, addr in ipairs(excludeAddresses) do
+        excludeSet[addr] = true
+    end
+    local map = {}
+    for addr, data in pairs(sensorCache) do
+        if not excludeSet[addr] and (data.portType or "storage") ~= "factory" then
+            for name, count in pairs(data.items or {}) do
+                map[name] = (map[name] or 0) + count
+            end
+        end
+    end
+    return map
+end
+
+function networkProxy.getTaggedStockElsewhere(excludeAddresses, tag)
+    refreshStock()
+    if not stockCache then return {} end
+    local elsewhereMap = networkProxy.getStockMapElsewhere(excludeAddresses)
+    local result = {}
+    for _, item in ipairs(stockCache) do
+        if item.tags and item.tags[tag] then
+            local available = elsewhereMap[item.name] or 0
+            if available > 0 then
+                table.insert(result, { name = item.name, count = available })
+            end
+        end
+    end
+    return result
+end
+
 function networkProxy.getBestAddress(addresses)
     refreshSensors()
     local best = addresses[1]
