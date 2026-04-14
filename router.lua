@@ -18,33 +18,6 @@ function router.run(data)
     local lastRun = {}
     local lastConsolidate = {}
 
-    -- Delivery tracker: prevents re-requesting items that didn't actually arrive
-    -- Key: "destIdx:itemName" -> { time=when requested, count=count at time of request }
-    local deliveryTracker = {}
-    local DELIVERY_COOLDOWN = 30
-
-    -- Check if we should skip a request (item was recently requested but didn't deliver)
-    local function shouldThrottle(key, currentCount, now)
-        local entry = deliveryTracker[key]
-        if not entry then return false end
-        if now - entry.time >= DELIVERY_COOLDOWN then
-            -- Cooldown expired, allow retry
-            deliveryTracker[key] = nil
-            return false
-        end
-        if currentCount > entry.count then
-            -- Count increased — delivery succeeded, allow new requests
-            deliveryTracker[key] = nil
-            return false
-        end
-        -- Still on cooldown, no delivery detected
-        return true
-    end
-
-    local function trackRequest(key, currentCount, now)
-        deliveryTracker[key] = { time = now, count = currentCount }
-    end
-
     while running do
         for i, dest in ipairs(data.destinations) do
             local now = os.clock()
@@ -61,29 +34,31 @@ function router.run(data)
                     if not rule.enabled then goto nextRule end
 
                     if rule.type == "item" then
+                        -- Item rules: request shortfall, but only what exists elsewhere
+                        -- This prevents requesting from the destination's own Stock Link
                         local have = network.getGroupItemCount(dest.addresses, rule.item)
                         local shortfall = rule.count - have
                         if shortfall > 0 then
-                            local key = i .. ":item:" .. rule.item
-                            if not shouldThrottle(key, have, now) then
-                                network.requestItems(targetAddr, rule.item, shortfall)
-                                trackRequest(key, have, now)
+                            local elsewhere = network.getStockElsewhere(dest.addresses, rule.item)
+                            if elsewhere > 0 then
+                                local toRequest = math.min(shortfall, elsewhere)
+                                network.requestItems(targetAddr, rule.item, toRequest)
                             end
                         end
 
                     elseif rule.type == "tag" then
+                        -- Tag rules: only pull items the destination has NONE of
+                        -- Prevents self-pull loops (Stock Ticker pulling from own Stock Link)
                         if sensor.freeSlots > 0 then
                             local budget = sensor.freeSlots * 64
                             local tagged = network.getTaggedStockElsewhere(dest.addresses, rule.tag)
                             for _, item in ipairs(tagged) do
                                 if budget <= 0 then break end
                                 local atDest = network.getGroupItemCount(dest.addresses, item.name)
-                                local toRequest = math.min(item.count, budget)
-                                if toRequest > 0 then
-                                    local key = i .. ":tag:" .. item.name
-                                    if not shouldThrottle(key, atDest, now) then
+                                if atDest == 0 then
+                                    local toRequest = math.min(item.count, budget)
+                                    if toRequest > 0 then
                                         network.requestItems(targetAddr, item.name, toRequest)
-                                        trackRequest(key, atDest, now)
                                         budget = budget - toRequest
                                     end
                                 end
@@ -91,6 +66,8 @@ function router.run(data)
                         end
 
                     elseif rule.type == "group" then
+                        -- Group rules: only pull items the destination has NONE of
+                        -- Same self-pull prevention as tag rules
                         local group = nil
                         for _, g in ipairs(data.groups or {}) do
                             if g.name == rule.groupName then
@@ -105,14 +82,10 @@ function router.run(data)
                                 if budget <= 0 then break end
                                 local available = elsewhereMap[groupItem.name] or 0
                                 local atDest = network.getGroupItemCount(dest.addresses, groupItem.name)
-                                local toRequest = math.min(available, budget)
-                                if toRequest > 0 then
-                                    local key = i .. ":grp:" .. groupItem.name
-                                    if not shouldThrottle(key, atDest, now) then
-                                        network.requestItems(targetAddr, groupItem.name, toRequest)
-                                        trackRequest(key, atDest, now)
-                                        budget = budget - toRequest
-                                    end
+                                if atDest == 0 and available > 0 then
+                                    local toRequest = math.min(available, budget)
+                                    network.requestItems(targetAddr, groupItem.name, toRequest)
+                                    budget = budget - toRequest
                                 end
                             end
                         end

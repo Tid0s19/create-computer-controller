@@ -5,7 +5,7 @@ local network = require("network")
 
 local ui = {}
 local W, H
-local VERSION = "1.1.1"
+local VERSION = "1.1.2"
 
 local C = {
     title   = colours.yellow,
