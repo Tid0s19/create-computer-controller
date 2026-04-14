@@ -6,6 +6,7 @@ local repo = "https://raw.githubusercontent.com/Tid0s19/create-computer-controll
 local files = {
     { remote = "pocket.lua", local_name = "startup.lua" },
     { remote = "ui.lua",     local_name = "ui.lua" },
+    { remote = "updater.lua", local_name = "updater.lua" },
 }
 
 term.clear()

@@ -2,6 +2,10 @@
 -- Run on a wireless pocket computer to manage config on the move
 -- Connects to the server wirelessly to browse items, edit rules, etc.
 
+-- Auto-update from GitHub on boot
+local hasUpdater, updater = pcall(require, "updater")
+if hasUpdater and updater.check("pocket") then return end
+
 local CHANNEL_SERVER = 4202
 local REPLY_CHANNEL = 4203 + os.getComputerID()
 
@@ -138,6 +142,69 @@ function networkProxy.getItemCountAt(address, itemName)
     local s = sensorCache[address]
     if not s or not s.items then return 0 end
     return s.items[itemName] or 0
+end
+
+function networkProxy.getSensorPortType(address)
+    refreshSensors()
+    local s = sensorCache[address]
+    if not s then return "storage" end
+    return s.portType or "storage"
+end
+
+function networkProxy.getGroupSensor(addresses)
+    refreshSensors()
+    local totalItems = {}
+    local totalSlots = 0
+    local usedSlots = 0
+    local freeSlots = 0
+    local anyOnline = false
+
+    for _, addr in ipairs(addresses) do
+        local data = sensorCache[addr]
+        if data then
+            anyOnline = true
+            for name, count in pairs(data.items or {}) do
+                totalItems[name] = (totalItems[name] or 0) + count
+            end
+            totalSlots = totalSlots + (data.totalSlots or 0)
+            usedSlots = usedSlots + (data.usedSlots or 0)
+            freeSlots = freeSlots + (data.freeSlots or 0)
+        end
+    end
+
+    if not anyOnline then return nil end
+    return {
+        items = totalItems,
+        totalSlots = totalSlots,
+        usedSlots = usedSlots,
+        freeSlots = freeSlots,
+    }
+end
+
+function networkProxy.getGroupItemCount(addresses, itemName)
+    refreshSensors()
+    local total = 0
+    for _, addr in ipairs(addresses) do
+        local s = sensorCache[addr]
+        if s and s.items then
+            total = total + (s.items[itemName] or 0)
+        end
+    end
+    return total
+end
+
+function networkProxy.getBestAddress(addresses)
+    refreshSensors()
+    local best = addresses[1]
+    local bestFree = -1
+    for _, addr in ipairs(addresses) do
+        local s = sensorCache[addr]
+        if s and (s.freeSlots or 0) > bestFree then
+            bestFree = s.freeSlots
+            best = addr
+        end
+    end
+    return best
 end
 
 function networkProxy.getStock()

@@ -10,6 +10,7 @@ local files = {
     "router.lua",
     "display.lua",
     "ui.lua",
+    "updater.lua",
 }
 
 term.clear()

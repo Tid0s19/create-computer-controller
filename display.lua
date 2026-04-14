@@ -50,7 +50,7 @@ function display.controller(mon, data, network)
     for _, dest in ipairs(data.destinations) do
         if y + 1 > mH then break end
 
-        local sensor = network.getSensor(dest.address)
+        local sensor = network.getGroupSensor(dest.addresses)
         local pct = 0
         local pctText = "?"
 

@@ -11,14 +11,55 @@ local CONFIG_FILE = "sensor.cfg"
 -- Setup
 ----------------------------------------------------------------------
 
-local function getAddress()
-    if fs.exists(CONFIG_FILE) then
-        local f = fs.open(CONFIG_FILE, "r")
-        local addr = f.readAll()
-        f.close()
-        if addr and addr ~= "" then return addr:match("^%s*(.-)%s*$") end
-    end
+local function loadConfig()
+    if not fs.exists(CONFIG_FILE) then return nil end
+    local f = fs.open(CONFIG_FILE, "r")
+    local raw = f.readAll()
+    f.close()
+    if not raw or raw == "" then return nil end
 
+    -- Try JSON format first
+    local ok, cfg = pcall(textutils.unserialiseJSON, raw)
+    if ok and cfg and cfg.address then return cfg end
+
+    -- Old plain-text format: migrate by prompting for port type
+    local addr = raw:match("^%s*(.-)%s*$")
+    if addr and addr ~= "" then
+        term.clear()
+        term.setCursorPos(1, 1)
+        term.setTextColour(colours.yellow)
+        print("Sensor Config Update")
+        print()
+        term.setTextColour(colours.white)
+        print("Address: " .. addr)
+        print()
+        print("Is this port connected to")
+        print("[S]torage or a [F]actory?")
+        print()
+        term.setTextColour(colours.cyan)
+        write("> ")
+        term.setTextColour(colours.white)
+        while true do
+            local _, key = os.pullEvent("key")
+            if key == keys.s then
+                local cfg = { address = addr, portType = "storage" }
+                local fh = fs.open(CONFIG_FILE, "w")
+                fh.write(textutils.serialiseJSON(cfg))
+                fh.close()
+                return cfg
+            elseif key == keys.f then
+                local cfg = { address = addr, portType = "factory" }
+                local fh = fs.open(CONFIG_FILE, "w")
+                fh.write(textutils.serialiseJSON(cfg))
+                fh.close()
+                return cfg
+            end
+        end
+    end
+    return nil
+end
+
+local function setupConfig()
     term.clear()
     term.setCursorPos(1, 1)
     term.setTextColour(colours.yellow)
@@ -36,10 +77,31 @@ local function getAddress()
         print("No address entered. Exiting.")
         return nil
     end
+
+    print()
+    print("Is this port connected to")
+    print("[S]torage or a [F]actory?")
+    print()
+    term.setTextColour(colours.cyan)
+    write("> ")
+    term.setTextColour(colours.white)
+    local portType
+    while true do
+        local _, key = os.pullEvent("key")
+        if key == keys.s then
+            portType = "storage"
+            break
+        elseif key == keys.f then
+            portType = "factory"
+            break
+        end
+    end
+
+    local cfg = { address = addr, portType = portType }
     local f = fs.open(CONFIG_FILE, "w")
-    f.write(addr)
+    f.write(textutils.serialiseJSON(cfg))
     f.close()
-    return addr
+    return cfg
 end
 
 local function findModem()
@@ -93,8 +155,14 @@ end
 -- Main
 ----------------------------------------------------------------------
 
-local address = getAddress()
-if not address then return end
+-- Auto-update from GitHub on boot
+local hasUpdater, updater = pcall(require, "updater")
+if hasUpdater and updater.check("sensor") then return end
+
+local cfg = loadConfig() or setupConfig()
+if not cfg then return end
+local address = cfg.address
+local portType = cfg.portType or "storage"
 
 local modem = findModem()
 if not modem then
@@ -125,6 +193,7 @@ term.setCursorPos(1, 1)
 term.setTextColour(colours.yellow)
 print("Sensor: " .. address)
 term.setTextColour(colours.white)
+print("Type: " .. portType)
 print("Chest: " .. invName)
 if mon then
     term.setTextColour(colours.lime)
@@ -147,6 +216,7 @@ while true do
         modem.transmit(CHANNEL_SENSOR, CHANNEL_CTRL, {
             type = "sensor_report",
             address = address,
+            portType = portType,
             items = items,
             totalSlots = totalSlots,
             usedSlots = usedSlots,

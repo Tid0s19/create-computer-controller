@@ -51,6 +51,26 @@ else
     failed = true
 end
 
+-- Download updater module
+term.setTextColour(colours.grey)
+write("  Downloading updater... ")
+if fs.exists("updater.lua") then
+    fs.delete("updater.lua")
+end
+
+local ok3 = pcall(function()
+    shell.run("wget", repo .. "updater.lua", "updater.lua")
+end)
+
+if ok3 and fs.exists("updater.lua") then
+    term.setTextColour(colours.lime)
+    print("OK")
+else
+    term.setTextColour(colours.red)
+    print("FAILED")
+    failed = true
+end
+
 print()
 if failed then
     term.setTextColour(colours.red)

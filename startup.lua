@@ -3,6 +3,10 @@
 -- Optional: attach a monitor to display all managed storages
 -- Pocket computers can connect wirelessly to manage config
 
+-- Auto-update from GitHub on boot
+local hasUpdater, updater = pcall(require, "updater")
+if hasUpdater and updater.check("controller") then return end
+
 local config = require("config")
 local network = require("network")
 local router = require("router")

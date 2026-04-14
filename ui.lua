@@ -464,28 +464,41 @@ end
 -- Pick a destination address (from sensors or manual)
 ----------------------------------------------------------------------
 
-local function pickAddress()
+local function pickAddress(data, title)
+    title = title or "Select frogport address"
     local addrs = network.getSensorAddresses()
+
+    -- Build set of already-used addresses
+    local used = {}
+    if data then
+        for _, dest in ipairs(data.destinations) do
+            for _, addr in ipairs(dest.addresses) do
+                used[addr] = true
+            end
+        end
+    end
 
     local list = {}
     for _, addr in ipairs(addrs) do
-        local sensor = network.getSensor(addr)
-        local right, rcol = "?", C.dim
-        if sensor then
-            right, rcol = usageText(sensor)
+        if not used[addr] then
+            local sensor = network.getSensor(addr)
+            local right, rcol = "?", C.dim
+            if sensor then
+                right, rcol = usageText(sensor)
+            end
+            table.insert(list, { label = addr, right = right, rcol = rcol, addr = addr })
         end
-        table.insert(list, { label = addr, right = right, rcol = rcol, addr = addr })
     end
     table.insert(list, { label = "" })
     table.insert(list, { label = "Type address manually...", action = "manual" })
 
-    local idx = pick("Select frogport address", list, "Enter:Select  Q:Cancel")
+    local idx = pick(title, list, "Enter:Select  Q:Cancel")
     if not idx then return nil end
 
     if list[idx].action == "manual" then
         clear()
         W, H = term.getSize()
-        bar(1, " Add New Storage Container")
+        bar(1, " " .. title)
         local addr = input("Frogport address: ", 3)
         if addr and addr ~= "" then return addr end
         return nil
@@ -522,10 +535,10 @@ local function ruleLabel(rule, data)
     return "???"
 end
 
-local function ruleStatus(rule, address)
+local function ruleStatus(rule, addresses)
     if not rule.enabled then return "OFF", C.off end
     if rule.type == "item" then
-        local have = network.getItemCountAt(address, rule.item)
+        local have = network.getGroupItemCount(addresses, rule.item)
         if have >= rule.count then
             return have .. "/" .. rule.count, C.ok
         else
@@ -539,49 +552,92 @@ local function editDestination(dest, data)
     while true do
         W, H = term.getSize()
         local items = {}
-        local sensor = network.getSensor(dest.address)
+        local groupSensor = network.getGroupSensor(dest.addresses)
 
-        -- Sensor status line
-        if sensor then
-            local pctText, pctCol = usageText(sensor)
-            local total = 0
-            for _, c in pairs(sensor.items) do total = total + c end
+        -- Group/sensor status header
+        if #dest.addresses > 1 then
+            -- Multi-port group header
+            local online = 0
+            for _, addr in ipairs(dest.addresses) do
+                if network.getSensor(addr) then online = online + 1 end
+            end
+            local statusLabel = #dest.addresses .. " ports | " .. online .. " online"
+            local right, rcol = "?", C.dim
+            if groupSensor then
+                right, rcol = usageText(groupSensor)
+                right = right .. " full"
+            end
             table.insert(items, {
-                label = "Sensor: online | " .. total .. " items",
-                right = pctText .. " full",
-                rcol = pctCol,
-                action = "info"
+                label = statusLabel,
+                right = right,
+                rcol = rcol,
+                action = "group_info"
             })
         else
-            table.insert(items, {
-                label = "Sensor: offline (no data)",
-                right = "!",
-                rcol = C.err,
-                action = "info"
-            })
+            -- Single port header
+            local sensor = network.getSensor(dest.addresses[1])
+            if sensor then
+                local pctText, pctCol = usageText(sensor)
+                local total = 0
+                for _, c in pairs(sensor.items) do total = total + c end
+                table.insert(items, {
+                    label = "Sensor: online | " .. total .. " items",
+                    right = pctText .. " full",
+                    rcol = pctCol,
+                    action = "info"
+                })
+            else
+                table.insert(items, {
+                    label = "Sensor: offline (no data)",
+                    right = "!",
+                    rcol = C.err,
+                    action = "info"
+                })
+            end
+        end
+
+        -- Individual port entries for groups
+        if #dest.addresses > 1 then
+            for pi, addr in ipairs(dest.addresses) do
+                local sensor = network.getSensor(addr)
+                local right, rcol = "offline", C.err
+                if sensor then
+                    right, rcol = usageText(sensor)
+                end
+                table.insert(items, {
+                    label = "  " .. addr,
+                    right = right,
+                    rcol = rcol,
+                    action = "port_info",
+                    portAddr = addr,
+                    portIdx = pi,
+                })
+            end
         end
         table.insert(items, { label = "" })
 
         -- Rules
         for i, rule in ipairs(dest.rules) do
-            local status, scol = ruleStatus(rule, dest.address)
+            local status, scol = ruleStatus(rule, dest.addresses)
             table.insert(items, { label = ruleLabel(rule, data), right = status, rcol = scol, idx = i })
         end
         table.insert(items, { label = "" })
         table.insert(items, { label = "[+] Keep X of item...", action = "add_item" })
         table.insert(items, { label = "[+] Send all with tag...", action = "add_tag" })
         table.insert(items, { label = "[+] Assign item group...", action = "add_group" })
+        table.insert(items, { label = "[+] Add port to group...", action = "add_port" })
         table.insert(items, { label = "[R] Rename", action = "rename" })
         table.insert(items, { label = "[D] Delete container", action = "delete" })
 
-        local idx = pick(dest.name .. " (" .. dest.address .. ")", items,
+        local titleAddr = #dest.addresses == 1 and dest.addresses[1] or (#dest.addresses .. " ports")
+        local idx = pick(dest.name .. " (" .. titleAddr .. ")", items,
             "Enter:Edit  E:Toggle  Q:Back",
             function(key, sel)
                 if key == keys.e and items[sel] and items[sel].idx then
                     local rule = dest.rules[items[sel].idx]
                     rule.enabled = not rule.enabled
                     config.save(data)
-                    local status, scol = ruleStatus(rule, dest.address)
+                    local status, scol = ruleStatus(rule, dest.addresses)
                     items[sel].right = status
                     items[sel].rcol = scol
                     return "refresh"
@@ -593,6 +649,7 @@ local function editDestination(dest, data)
         local it = items[idx]
 
         if it.action == "info" then
+            local sensor = network.getSensor(dest.addresses[1])
             if sensor then
                 local invItems = {}
                 for name, count in pairs(sensor.items) do
@@ -602,7 +659,58 @@ local function editDestination(dest, data)
                 if #invItems == 0 then
                     table.insert(invItems, { label = "(empty)" })
                 end
-                pick("Inventory at " .. dest.address, invItems, "Type:Search  Q:Back", nil, {searchable = true})
+                pick("Inventory at " .. dest.addresses[1], invItems, "Type:Search  Q:Back", nil, {searchable = true})
+            end
+
+        elseif it.action == "group_info" then
+            if groupSensor then
+                local invItems = {}
+                for name, count in pairs(groupSensor.items) do
+                    table.insert(invItems, { label = name, right = tostring(count), rcol = C.dim, name = name })
+                end
+                table.sort(invItems, function(a, b) return a.label < b.label end)
+                if #invItems == 0 then
+                    table.insert(invItems, { label = "(empty)" })
+                end
+                pick("Combined inventory", invItems, "Type:Search  Q:Back", nil, {searchable = true})
+            end
+
+        elseif it.action == "port_info" then
+            local sensor = network.getSensor(it.portAddr)
+            local portActions = {}
+            if sensor then
+                table.insert(portActions, { label = "View inventory", action = "view" })
+            end
+            if #dest.addresses > 1 then
+                table.insert(portActions, { label = "Remove from group", action = "remove" })
+            end
+            if #portActions == 0 then
+                table.insert(portActions, { label = "(offline)" })
+            end
+            local choice = pick("Port: " .. it.portAddr, portActions, "Enter:Select  Q:Back")
+            if choice then
+                local pa = portActions[choice]
+                if pa.action == "view" and sensor then
+                    local invItems = {}
+                    for name, count in pairs(sensor.items) do
+                        table.insert(invItems, { label = name, right = tostring(count), rcol = C.dim, name = name })
+                    end
+                    table.sort(invItems, function(a, b) return a.label < b.label end)
+                    if #invItems == 0 then
+                        table.insert(invItems, { label = "(empty)" })
+                    end
+                    pick("Inventory at " .. it.portAddr, invItems, "Type:Search  Q:Back", nil, {searchable = true})
+                elseif pa.action == "remove" then
+                    clear()
+                    W, H = term.getSize()
+                    bar(1, " Remove port")
+                    at(2, 3, "Remove " .. it.portAddr .. "? (y/n)", C.err)
+                    local _, key = os.pullEvent("key")
+                    if key == keys.y then
+                        table.remove(dest.addresses, it.portIdx)
+                        config.save(data)
+                    end
+                end
             end
 
         elseif it.action == "add_item" then
@@ -628,7 +736,7 @@ local function editDestination(dest, data)
                 W, H = term.getSize()
                 bar(1, " Add item rule")
                 at(2, 3, "Item: " .. (displayName or itemName), C.accent)
-                local have = network.getItemCountAt(dest.address, itemName)
+                local have = network.getGroupItemCount(dest.addresses, itemName)
                 if have > 0 then
                     at(2, 4, "Currently in container: " .. have, C.dim)
                 end
@@ -701,6 +809,13 @@ local function editDestination(dest, data)
                 end
             end
 
+        elseif it.action == "add_port" then
+            local addr = pickAddress(data, "Add port to group")
+            if addr then
+                table.insert(dest.addresses, addr)
+                config.save(data)
+            end
+
         elseif it.action == "rename" then
             clear()
             W, H = term.getSize()
@@ -741,7 +856,7 @@ local function editDestination(dest, data)
                     clear()
                     W, H = term.getSize()
                     bar(1, " Change amount")
-                    local have = network.getItemCountAt(dest.address, rule.item)
+                    local have = network.getGroupItemCount(dest.addresses, rule.item)
                     at(2, 3, "Currently in container: " .. have, C.dim)
                     local val = input("New amount to keep: ", 5, tostring(rule.count))
                     val = tonumber(val)
@@ -939,10 +1054,13 @@ end
 local function buildMainList(data)
     local items = {}
     for _, dest in ipairs(data.destinations) do
-        local sensor = network.getSensor(dest.address)
+        local groupSensor = network.getGroupSensor(dest.addresses)
         local right, rcol
-        if sensor then
-            right, rcol = usageText(sensor)
+        if groupSensor then
+            right, rcol = usageText(groupSensor)
+            if #dest.addresses > 1 then
+                right = right .. " (" .. #dest.addresses .. ")"
+            end
         else
             right = "no sensor"
             rcol = C.err
@@ -968,9 +1086,9 @@ function ui.run(data)
                     bar(1, " Add New Storage Container")
                     local name = input("Container Name (e.g. Tools): ", 3)
                     if name and name ~= "" then
-                        local addr = pickAddress()
+                        local addr = pickAddress(data)
                         if addr then
-                            table.insert(data.destinations, { name = name, address = addr, rules = {} })
+                            table.insert(data.destinations, { name = name, addresses = {addr}, rules = {} })
                             config.save(data)
                             local newItems = buildMainList(data)
                             for k in pairs(items) do items[k] = nil end
@@ -1000,11 +1118,11 @@ function ui.run(data)
             bar(1, " Add New Storage Container")
             local name = input("Container Name (e.g. Tools): ", 3)
             if name and name ~= "" then
-                local addr = pickAddress()
+                local addr = pickAddress(data)
                 if addr then
                     table.insert(data.destinations, {
                         name = name,
-                        address = addr,
+                        addresses = {addr},
                         rules = {},
                     })
                     config.save(data)
